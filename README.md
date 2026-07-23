@@ -3,8 +3,9 @@
 `dtr` means **do/develop the right repo**.
 
 It accepts the repository reference you already have, resolves what it means,
-and invokes the appropriate underlying tool. MVP00 supports forge-aware cloning
-and Go tool installation from repositories on macOS and Linux.
+and invokes the appropriate underlying tool. It supports forge-aware cloning,
+process-scoped GitHub account selection, and Go tool installation from
+repositories on macOS and Linux.
 
 ```console
 $ dtr --explain clone --depth 1 -O hjr265/gittop
@@ -17,6 +18,14 @@ $ dtr --explain install --go https://github.com/hjr265/gittop
 repospec: GitHub repository hjr265/gittop
 backend:  go
 command:  go install github.com/hjr265/gittop@latest
+
+$ dtr config set github.auth.auto_switch mevanlc,mike-clark-8192
+$ dtr --explain clone mike-clark-8192/foo
+repospec: GitHub repository mike-clark-8192/foo
+backend:  gh
+auth:     auto-switch to mike-clark-8192 (process-scoped; active gh account unchanged)
+target:   foo
+command:  gh repo clone https://github.com/mike-clark-8192/foo.git
 ```
 
 ## Install
@@ -90,6 +99,41 @@ dtr clone -vq owner/repo
 options consume values. When `gh` or `glab` is selected, those options are
 placed after the forge CLI's `--` separator.
 
+### GitHub account auto-switching
+
+If you use multiple accounts on `github.com`, configure the accounts dtr may
+select automatically:
+
+```sh
+dtr config set github.auth.auto_switch mevanlc,mike-clark-8192
+```
+
+When the explicit owner in `owner/repo` or a GitHub URL matches an account in
+that allowlist, dtr obtains that account's stored token from `gh` and supplies it
+to the clone process through `GH_TOKEN`. It does not run `gh auth switch` or
+change the active GitHub CLI account. The clone uses HTTPS because selecting a
+token does not select an SSH key.
+
+An unmatched owner and a bare repository name retain normal active-account
+behavior. If an owner matches the allowlist but its stored token cannot be
+retrieved, dtr fails instead of silently cloning as another account.
+
+The setting can be inspected or removed with:
+
+```sh
+dtr config get github.auth.auto_switch
+dtr config unset github.auth.auto_switch
+```
+
+Configuration is stored in `$XDG_CONFIG_HOME/dtr/config.toml`, or
+`$HOME/.config/dtr/config.toml` when `XDG_CONFIG_HOME` is unset.
+`DTR_CONFIG_DIR` overrides the containing directory. The file contains account
+names only; dtr never writes GitHub tokens to it.
+
+The selected identity is scoped to cloning. The resulting checkout is not
+persistently bound to that identity for later `git fetch` or `git push`
+operations.
+
 ## Install from a repository
 
 ```text
@@ -155,19 +199,22 @@ starts the resolved clone/install operation or creates planned directories.
 - Well-known forge handling covers `github.com` and `gitlab.com`.
 - Forge browser-page URLs such as `/tree/` and `/-/blob/` are rejected rather
   than guessed at.
-- Literal `scp://` and `sftp://` staging is parked for MVP01+.
+- Literal `scp://` and `sftp://` staging is parked for a later milestone.
 - Go module paths that differ from their repository paths, monorepo command
-  selection, other install backends, configuration, and Windows are later work.
+  selection, other install backends, GitLab/Enterprise account selection, and
+  Windows are later work.
 
-The full design record and acceptance criteria live in
-[devdocs/PLAN-MVP00.md](devdocs/PLAN-MVP00.md).
+The design records and acceptance criteria live in
+[devdocs/PLAN-MVP00.md](devdocs/PLAN-MVP00.md) and
+[devdocs/PLAN-MVP01.md](devdocs/PLAN-MVP01.md).
 
 ## Development
 
 ```sh
 cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo nextest run
-cargo check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo nextest run --locked
+cargo check --locked
+actionlint .github/workflows/ci.yml
 git diff --check
 ```

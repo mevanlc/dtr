@@ -1,7 +1,9 @@
 mod cli;
 mod clone_args;
 mod command;
+mod config;
 mod error;
+mod github_auth;
 mod repospec;
 mod resolve;
 
@@ -23,9 +25,9 @@ pub fn main_entry() -> i32 {
 }
 
 fn run() -> Result<i32, DtrError> {
-    let cli = Cli::parse();
+    let Cli { explain, command } = Cli::parse();
 
-    let plan = match cli.command {
+    let plan = match command {
         DtrCommand::Clone(args) => match parse_clone_args(args.argv)? {
             ParsedClone::Help => {
                 print!("{}", clone_args::HELP);
@@ -34,9 +36,15 @@ fn run() -> Result<i32, DtrError> {
             ParsedClone::Request(request) => plan_clone(request)?,
         },
         DtrCommand::Install(args) => plan_install(args)?,
+        DtrCommand::Config(args) => {
+            if explain {
+                return Err(DtrError::new("--explain does not apply to dtr config"));
+            }
+            return config::run(args);
+        }
     };
 
-    if cli.explain {
+    if explain {
         plan.explain();
         Ok(0)
     } else {

@@ -6,7 +6,6 @@ use std::process::Command;
 
 use crate::error::DtrError;
 
-#[derive(Debug)]
 pub(crate) struct CommandPlan {
     pub(crate) program: OsString,
     pub(crate) args: Vec<OsString>,
@@ -15,12 +14,32 @@ pub(crate) struct CommandPlan {
     pub(crate) preparations: Vec<PathBuf>,
     pub(crate) repospec: String,
     pub(crate) backend: &'static str,
+    pub(crate) auth: Option<String>,
+    pub(crate) environment: Vec<SecretEnvironment>,
+    pub(crate) removed_environment: Vec<OsString>,
+}
+
+pub(crate) struct SecretEnvironment {
+    name: OsString,
+    value: OsString,
+}
+
+impl SecretEnvironment {
+    pub(crate) fn new(name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+        }
+    }
 }
 
 impl CommandPlan {
     pub(crate) fn explain(&self) {
         println!("repospec: {}", self.repospec);
         println!("backend:  {}", self.backend);
+        if let Some(auth) = &self.auth {
+            println!("auth:     {auth}");
+        }
         if let Some(directory) = &self.current_dir {
             println!("directory: {}", shell_quote(directory.as_os_str()));
         }
@@ -45,6 +64,12 @@ impl CommandPlan {
 
         let mut command = Command::new(&self.program);
         command.args(&self.args);
+        for variable in &self.environment {
+            command.env(&variable.name, &variable.value);
+        }
+        for name in &self.removed_environment {
+            command.env_remove(name);
+        }
         if let Some(directory) = &self.current_dir {
             command.current_dir(directory);
         }

@@ -27,6 +27,9 @@ pub(crate) enum DtrCommand {
     /// Install tools from a repository
     #[command(visible_alias = "i")]
     Install(InstallArgs),
+
+    /// Read or change dtr configuration
+    Config(ConfigArgs),
 }
 
 #[derive(Debug, Args)]
@@ -50,6 +53,42 @@ pub(crate) struct InstallArgs {
     /// Repository name, path, or remote
     #[arg(value_name = "DTR_REPOSPEC")]
     pub(crate) repospec: OsString,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ConfigArgs {
+    #[command(subcommand)]
+    pub(crate) command: ConfigCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum ConfigCommand {
+    /// Set a configuration value
+    Set(ConfigSetArgs),
+
+    /// Print a configuration value
+    Get(ConfigKeyArgs),
+
+    /// Remove a configuration value
+    Unset(ConfigKeyArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ConfigSetArgs {
+    /// Configuration key
+    #[arg(value_name = "KEY")]
+    pub(crate) key: String,
+
+    /// Configuration value
+    #[arg(value_name = "VALUE")]
+    pub(crate) value: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ConfigKeyArgs {
+    /// Configuration key
+    #[arg(value_name = "KEY")]
+    pub(crate) key: String,
 }
 
 #[cfg(test)]
@@ -82,5 +121,18 @@ mod tests {
     fn install_alias_is_accepted() {
         let cli = Cli::try_parse_from(["dtr", "i", "--go", "owner/repo"]).expect("valid command");
         assert!(matches!(cli.command, DtrCommand::Install(_)));
+    }
+
+    #[test]
+    fn config_set_accepts_the_dotted_auth_key() {
+        let cli = Cli::try_parse_from([
+            "dtr",
+            "config",
+            "set",
+            "github.auth.auto_switch",
+            "mevanlc,mike-clark-8192",
+        ])
+        .expect("valid command");
+        assert!(matches!(cli.command, DtrCommand::Config(_)));
     }
 }

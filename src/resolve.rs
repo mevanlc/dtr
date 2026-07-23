@@ -4,8 +4,9 @@ use std::process::Command;
 
 use crate::cli::InstallArgs;
 use crate::clone_args::{CloneRequest, NameMode};
-use crate::command::{CommandPlan, command_exists};
+use crate::command::{CommandPlan, SecretEnvironment, command_exists};
 use crate::error::DtrError;
+use crate::github_auth;
 use crate::repospec::{Forge, RepoSpec};
 
 pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError> {
@@ -32,17 +33,45 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
                 pass_target,
                 preparations,
                 repospec,
+                None,
+                Vec::new(),
+                Vec::new(),
             ))
         }
-        RepoSpec::Forge { forge, remote, .. } => {
+        RepoSpec::Forge {
+            forge,
+            host,
+            namespace,
+            repo,
+            remote,
+        } => {
             let preferred = match forge {
                 Forge::GitHub => "gh",
                 Forge::GitLab => "glab",
             };
             if command_exists(preferred) {
-                let repository = remote
+                let mut repository = remote
                     .clone()
                     .unwrap_or_else(|| request.spec.forge_slug().expect("forge slug").into());
+                let (auth, environment, removed_environment) = if *forge == Forge::GitHub {
+                    if let Some(selection) = github_auth::select_for_owner(&namespace[0])? {
+                        repository =
+                            format!("https://{host}/{}/{}.git", namespace.join("/"), repo).into();
+                        let auth = format!(
+                            "auto-switch to {} (process-scoped; active gh account unchanged)",
+                            selection.account
+                        );
+                        (
+                            Some(auth),
+                            vec![SecretEnvironment::new("GH_TOKEN", selection.token)],
+                            vec![OsString::from("GITHUB_TOKEN")],
+                        )
+                    } else {
+                        (None, Vec::new(), Vec::new())
+                    }
+                } else {
+                    (None, Vec::new(), Vec::new())
+                };
                 Ok(forge_clone_plan(
                     preferred,
                     repository,
@@ -51,6 +80,9 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
                     pass_target,
                     preparations,
                     repospec,
+                    auth,
+                    environment,
+                    removed_environment,
                 ))
             } else {
                 require_command("git", "cloning a repository")?;
@@ -106,6 +138,9 @@ pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
             preparations: Vec::new(),
             repospec,
             backend: "go",
+            auth: None,
+            environment: Vec::new(),
+            removed_environment: Vec::new(),
         });
     }
 
@@ -127,6 +162,9 @@ pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
         preparations: Vec::new(),
         repospec,
         backend: "go",
+        auth: None,
+        environment: Vec::new(),
+        removed_environment: Vec::new(),
     })
 }
 
@@ -175,6 +213,9 @@ fn forge_clone_plan(
     pass_target: bool,
     preparations: Vec<PathBuf>,
     repospec: String,
+    auth: Option<String>,
+    environment: Vec<SecretEnvironment>,
+    removed_environment: Vec<OsString>,
 ) -> CommandPlan {
     let mut args = ["repo", "clone"].map(OsString::from).to_vec();
     args.push(repository);
@@ -193,6 +234,9 @@ fn forge_clone_plan(
         preparations,
         repospec,
         backend: program,
+        auth,
+        environment,
+        removed_environment,
     }
 }
 
@@ -218,6 +262,9 @@ fn git_clone_plan(
         preparations,
         repospec,
         backend: "git",
+        auth: None,
+        environment: Vec::new(),
+        removed_environment: Vec::new(),
     }
 }
 
