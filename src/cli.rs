@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -41,10 +41,20 @@ pub(crate) struct CloneArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("installer")
+        .required(true)
+        .multiple(false)
+        .args(["go", "rust"])
+))]
 pub(crate) struct InstallArgs {
     /// Install a Go command from the repository
-    #[arg(long, required = true)]
+    #[arg(long)]
     pub(crate) go: bool,
+
+    /// Install a Rust binary from the repository
+    #[arg(long, visible_alias = "cargo")]
+    pub(crate) rust: bool,
 
     /// Do not add @latest to a remote Go import path
     #[arg(long)]
@@ -53,6 +63,10 @@ pub(crate) struct InstallArgs {
     /// Repository name, path, or remote
     #[arg(value_name = "DTR_REPOSPEC")]
     pub(crate) repospec: OsString,
+
+    /// Native cargo install arguments, following --
+    #[arg(last = true, value_name = "CARGO_INSTALL_ARG", num_args = 0..)]
+    pub(crate) cargo_args: Vec<OsString>,
 }
 
 #[derive(Debug, Args)]
@@ -121,6 +135,72 @@ mod tests {
     fn install_alias_is_accepted() {
         let cli = Cli::try_parse_from(["dtr", "i", "--go", "owner/repo"]).expect("valid command");
         assert!(matches!(cli.command, DtrCommand::Install(_)));
+    }
+
+    #[test]
+    fn rust_and_cargo_select_the_same_installer() {
+        for selector in ["--rust", "--cargo"] {
+            let cli = Cli::try_parse_from(["dtr", "install", selector, "owner/repo"])
+                .expect("valid Rust install command");
+            let DtrCommand::Install(args) = cli.command else {
+                panic!("expected install command");
+            };
+            assert!(args.rust);
+            assert!(!args.go);
+        }
+    }
+
+    #[test]
+    fn installer_is_required_and_selectors_conflict() {
+        assert!(Cli::try_parse_from(["dtr", "install", "owner/repo"]).is_err());
+        assert!(Cli::try_parse_from(["dtr", "install", "--go", "--rust", "owner/repo",]).is_err());
+    }
+
+    #[test]
+    fn cargo_arguments_require_and_follow_the_separator() {
+        assert!(
+            Cli::try_parse_from(["dtr", "install", "--rust", "owner/repo", "--locked",]).is_err()
+        );
+
+        let cli = Cli::try_parse_from([
+            "dtr",
+            "install",
+            "--rust",
+            "owner/repo",
+            "--",
+            "--locked",
+            "--bin",
+            "tool",
+        ])
+        .expect("valid Rust install command");
+        let DtrCommand::Install(args) = cli.command else {
+            panic!("expected install command");
+        };
+        assert_eq!(
+            args.cargo_args,
+            ["--locked", "--bin", "tool"].map(OsString::from).to_vec()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargo_arguments_preserve_non_utf8_values() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let native_argument = OsString::from_vec(b"feature-\xff".to_vec());
+        let cli = Cli::try_parse_from([
+            OsString::from("dtr"),
+            OsString::from("install"),
+            OsString::from("--rust"),
+            OsString::from("owner/repo"),
+            OsString::from("--"),
+            native_argument.clone(),
+        ])
+        .expect("valid non-UTF-8 Cargo argument");
+        let DtrCommand::Install(args) = cli.command else {
+            panic!("expected install command");
+        };
+        assert_eq!(args.cargo_args, [native_argument]);
     }
 
     #[test]

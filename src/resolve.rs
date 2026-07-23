@@ -113,8 +113,18 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
 }
 
 pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
-    if !args.go {
-        return Err(DtrError::new("MVP00 requires the --go installer selector"));
+    if args.go {
+        plan_go_install(args)
+    } else {
+        plan_cargo_install(args)
+    }
+}
+
+fn plan_go_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
+    if !args.cargo_args.is_empty() {
+        return Err(DtrError::new(
+            "arguments after -- are supported only by the Rust/Cargo installer in MVP02",
+        ));
     }
     require_command("go", "installing a Go command")?;
     let spec = RepoSpec::parse(&args.repospec)?;
@@ -166,6 +176,84 @@ pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
         environment: Vec::new(),
         removed_environment: Vec::new(),
     })
+}
+
+fn plan_cargo_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
+    if args.no_latest {
+        return Err(DtrError::new(
+            "--no-latest applies only to the Go installer",
+        ));
+    }
+    reject_cargo_source_arguments(&args.cargo_args)?;
+    require_command("cargo", "installing a Rust binary")?;
+
+    let spec = RepoSpec::parse(&args.repospec)?;
+    let repospec = spec.description();
+    let mut command_args = vec![OsString::from("install")];
+    let mut auth = None;
+    let mut environment = Vec::new();
+    let mut removed_environment = Vec::new();
+
+    if let Some(path) = spec.local_path() {
+        command_args.push("--path".into());
+        command_args.push(path.as_os_str().to_os_string());
+    } else {
+        let owner = if matches!(spec, RepoSpec::GithubMine { .. }) {
+            Some(resolve_github_owner()?)
+        } else {
+            None
+        };
+        let remote = spec.cargo_git_remote(owner.as_deref())?;
+        command_args.push("--git".into());
+        command_args.push(remote);
+
+        if let RepoSpec::Forge {
+            forge: Forge::GitHub,
+            namespace,
+            ..
+        } = &spec
+            && let Some(selection) = github_auth::select_for_owner(&namespace[0])?
+        {
+            auth = Some(format!(
+                "auto-switch to {} (process-scoped; active gh account unchanged)",
+                selection.account
+            ));
+            (environment, removed_environment) =
+                github_auth::cargo_git_environment(&selection.token)?;
+        }
+    }
+    command_args.extend(args.cargo_args);
+
+    Ok(CommandPlan {
+        program: "cargo".into(),
+        args: command_args,
+        current_dir: None,
+        target_dir: None,
+        preparations: Vec::new(),
+        repospec,
+        backend: "cargo",
+        auth,
+        environment,
+        removed_environment,
+    })
+}
+
+fn reject_cargo_source_arguments(arguments: &[OsString]) -> Result<(), DtrError> {
+    const SOURCE_OPTIONS: [&str; 4] = ["--git", "--path", "--registry", "--index"];
+    for argument in arguments {
+        let Some(argument) = argument.to_str() else {
+            continue;
+        };
+        if let Some(option) = SOURCE_OPTIONS
+            .iter()
+            .find(|option| argument == **option || argument.starts_with(&format!("{option}=")))
+        {
+            return Err(DtrError::new(format!(
+                "Cargo source option {option} conflicts with dtr's resolved repository; remove it from the arguments after --"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn clone_target(request: &CloneRequest) -> Result<(PathBuf, bool, Vec<PathBuf>), DtrError> {
@@ -374,6 +462,31 @@ mod tests {
         assert_eq!(
             spec.go_import_path(Some("mevanlc")).unwrap(),
             "github.com/mevanlc/tool"
+        );
+    }
+
+    #[test]
+    fn rejects_cargo_source_arguments_in_separated_and_equals_forms() {
+        for argument in [
+            "--git",
+            "--git=https://example.com/repo",
+            "--path",
+            "--path=./repo",
+            "--registry",
+            "--registry=private",
+            "--index",
+            "--index=https://example.com/index",
+        ] {
+            assert!(
+                reject_cargo_source_arguments(&[argument.into()]).is_err(),
+                "{argument}"
+            );
+        }
+        assert!(
+            reject_cargo_source_arguments(
+                ["--locked", "--bin", "tool"].map(OsString::from).as_ref()
+            )
+            .is_ok()
         );
     }
 

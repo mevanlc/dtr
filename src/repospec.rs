@@ -58,7 +58,7 @@ impl RepoSpec {
 
         if text.starts_with("scp://") || text.starts_with("sftp://") {
             return Err(DtrError::new(
-                "scp:// and sftp:// repository staging is planned for MVP01+",
+                "scp:// and sftp:// repository staging is planned for a later milestone",
             ));
         }
 
@@ -296,6 +296,31 @@ impl RepoSpec {
         }
     }
 
+    pub(crate) fn cargo_git_remote(
+        &self,
+        github_owner: Option<&str>,
+    ) -> Result<OsString, DtrError> {
+        match self {
+            Self::Local { .. } => Err(DtrError::new(
+                "local repositories use cargo install --path, not --git",
+            )),
+            Self::Forge {
+                host,
+                namespace,
+                repo,
+                ..
+            } => Ok(format!("https://{host}/{}/{}.git", namespace.join("/"), repo).into()),
+            Self::GitUrl { remote, .. } => Ok(remote.clone()),
+            Self::ScpLike { remote, .. } => cargo_ssh_url(remote),
+            Self::GithubMine { repo } => {
+                let owner = github_owner.ok_or_else(|| {
+                    DtrError::new("the authenticated GitHub owner has not been resolved")
+                })?;
+                Ok(format!("https://github.com/{owner}/{repo}.git").into())
+            }
+        }
+    }
+
     pub(crate) fn is_local(&self) -> bool {
         matches!(self, Self::Local { .. })
     }
@@ -305,6 +330,20 @@ impl RepoSpec {
             Self::Local { path } => Some(path),
             _ => None,
         }
+    }
+}
+
+fn cargo_ssh_url(remote: &OsStr) -> Result<OsString, DtrError> {
+    let text = remote
+        .to_str()
+        .ok_or_else(|| DtrError::new("SCP-like repository references must be UTF-8"))?;
+    let (authority, path) = text
+        .split_once(':')
+        .expect("validated SCP-like repository has a colon");
+    if let Some(absolute) = path.strip_prefix('/') {
+        Ok(format!("ssh://{authority}/{absolute}").into())
+    } else {
+        Ok(format!("ssh://{authority}/~/{path}").into())
     }
 }
 
@@ -522,10 +561,55 @@ mod tests {
     }
 
     #[test]
+    fn cargo_remote_normalizes_forges_and_bare_github_names() {
+        assert_eq!(
+            parse("owner/tool").cargo_git_remote(None).unwrap().to_str(),
+            Some("https://github.com/owner/tool.git")
+        );
+        assert_eq!(
+            parse("http://gitlab.com/group/subgroup/tool")
+                .cargo_git_remote(None)
+                .unwrap()
+                .to_str(),
+            Some("https://gitlab.com/group/subgroup/tool.git")
+        );
+        assert_eq!(
+            parse("tool")
+                .cargo_git_remote(Some("mevanlc"))
+                .unwrap()
+                .to_str(),
+            Some("https://github.com/mevanlc/tool.git")
+        );
+    }
+
+    #[test]
+    fn cargo_remote_preserves_generic_urls_and_converts_scp_like_paths() {
+        let generic = "ssh://git@example.com/srv/tool.git";
+        assert_eq!(
+            parse(generic).cargo_git_remote(None).unwrap().to_str(),
+            Some(generic)
+        );
+        assert_eq!(
+            parse("git@example.com:owner/tool.git")
+                .cargo_git_remote(None)
+                .unwrap()
+                .to_str(),
+            Some("ssh://git@example.com/~/owner/tool.git")
+        );
+        assert_eq!(
+            parse("git@example.com:/srv/git/tool.git")
+                .cargo_git_remote(None)
+                .unwrap()
+                .to_str(),
+            Some("ssh://git@example.com/srv/git/tool.git")
+        );
+    }
+
+    #[test]
     fn parks_literal_scp_and_sftp_urls() {
         for value in ["scp://example.com/path", "sftp://example.com/path"] {
             let error = RepoSpec::parse(OsStr::new(value)).unwrap_err();
-            assert!(error.to_string().contains("MVP01+"));
+            assert!(error.to_string().contains("later milestone"));
         }
     }
 

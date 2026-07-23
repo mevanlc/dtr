@@ -61,6 +61,10 @@ impl Harness {
         let mut args = Vec::new();
         let mut gh_token_account = None;
         let mut github_token_present = false;
+        let mut cargo_git_fetch_cli = false;
+        let mut git_config_count = None;
+        let mut git_config_keys = Vec::new();
+        let mut git_auth_header_present = false;
         for line in text.lines() {
             if let Some(value) = line
                 .strip_prefix("cwd=<")
@@ -79,6 +83,20 @@ impl Harness {
                 gh_token_account = Some(value.to_owned());
             } else if line == "github_token_present=<yes>" {
                 github_token_present = true;
+            } else if line == "cargo_git_fetch_cli=<true>" {
+                cargo_git_fetch_cli = true;
+            } else if let Some(value) = line
+                .strip_prefix("git_config_count=<")
+                .and_then(|line| line.strip_suffix('>'))
+            {
+                git_config_count = Some(value.to_owned());
+            } else if let Some(value) = line
+                .strip_prefix("git_config_key=<")
+                .and_then(|line| line.strip_suffix('>'))
+            {
+                git_config_keys.push(value.to_owned());
+            } else if line == "git_auth_header_present=<yes>" {
+                git_auth_header_present = true;
             }
         }
         Invocation {
@@ -86,6 +104,10 @@ impl Harness {
             args,
             gh_token_account,
             github_token_present,
+            cargo_git_fetch_cli,
+            git_config_count,
+            git_config_keys,
+            git_auth_header_present,
         }
     }
 
@@ -104,6 +126,10 @@ struct Invocation {
     args: Vec<String>,
     gh_token_account: Option<String>,
     github_token_present: bool,
+    cargo_git_fetch_cli: bool,
+    git_config_count: Option<String>,
+    git_config_keys: Vec<String>,
+    git_auth_header_present: bool,
 }
 
 fn write_stub(path: &Path) {
@@ -152,6 +178,20 @@ fi
 if [ -n "${GITHUB_TOKEN-}" ]; then
   printf 'github_token_present=<yes>\n' >> "$log"
 fi
+if [ "${CARGO_NET_GIT_FETCH_WITH_CLI-}" = true ]; then
+  printf 'cargo_git_fetch_cli=<true>\n' >> "$log"
+fi
+if [ -n "${GIT_CONFIG_COUNT-}" ]; then
+  printf 'git_config_count=<%s>\n' "$GIT_CONFIG_COUNT" >> "$log"
+fi
+for key in "${GIT_CONFIG_KEY_0-}" "${GIT_CONFIG_KEY_1-}" "${GIT_CONFIG_KEY_2-}"; do
+  if [ -n "$key" ]; then
+    printf 'git_config_key=<%s>\n' "$key" >> "$log"
+  fi
+done
+case "${GIT_CONFIG_VALUE_0-}${GIT_CONFIG_VALUE_1-}${GIT_CONFIG_VALUE_2-}" in
+  *'Authorization: Basic '*) printf 'git_auth_header_present=<yes>\n' >> "$log" ;;
+esac
 for arg in "$@"; do
   printf 'arg=<%s>\n' "$arg" >> "$log"
 done
@@ -555,6 +595,288 @@ fn clone_n_after_subcommand_remains_git_no_checkout() {
         harness.invocation("gh").args,
         ["repo", "clone", "owner/repo", "--", "-n"]
     );
+}
+
+#[test]
+fn rust_local_install_maps_to_cargo_path_and_preserves_native_arguments() {
+    let harness = Harness::new(&["cargo"]);
+    let output = harness.run(&[
+        "install",
+        "--rust",
+        "./local repo",
+        "--",
+        "--locked",
+        "--bin",
+        "tool",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("cargo").args,
+        [
+            "install",
+            "--path",
+            "./local repo",
+            "--locked",
+            "--bin",
+            "tool",
+        ]
+    );
+}
+
+#[test]
+fn cargo_alias_and_remote_repositories_map_to_cargo_git() {
+    let cases: &[(&[&str], &[&str])] = &[
+        (
+            &["install", "--cargo", "owner/tool", "--", "--locked"],
+            &[
+                "install",
+                "--git",
+                "https://github.com/owner/tool.git",
+                "--locked",
+            ],
+        ),
+        (
+            &["install", "--rust", "http://gitlab.com/group/subgroup/tool"],
+            &[
+                "install",
+                "--git",
+                "https://gitlab.com/group/subgroup/tool.git",
+            ],
+        ),
+        (
+            &["install", "--rust", "ssh://git@example.com/srv/tool.git"],
+            &["install", "--git", "ssh://git@example.com/srv/tool.git"],
+        ),
+        (
+            &["install", "--rust", "git@example.com:owner/tool.git"],
+            &["install", "--git", "ssh://git@example.com/~/owner/tool.git"],
+        ),
+        (
+            &["install", "--rust", "git@example.com:/srv/tool.git"],
+            &["install", "--git", "ssh://git@example.com/srv/tool.git"],
+        ),
+    ];
+
+    for (dtr_args, cargo_args) in cases {
+        let harness = Harness::new(&["cargo"]);
+        let output = harness.run(dtr_args);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(harness.invocation("cargo").args, *cargo_args);
+    }
+}
+
+#[test]
+fn bare_rust_repo_uses_the_active_github_owner() {
+    let harness = Harness::new(&["cargo", "gh"]);
+    let output = harness.run(&["install", "--rust", "my-tool"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("cargo").args,
+        ["install", "--git", "https://github.com/mevanlc/my-tool.git",]
+    );
+    assert!(!harness.was_invoked("gh-auth-token"));
+}
+
+#[test]
+fn cargo_source_arguments_cannot_replace_the_resolved_repository() {
+    for argument in [
+        "--git",
+        "--git=https://example.com/other",
+        "--path",
+        "--path=./other",
+        "--registry",
+        "--registry=private",
+        "--index",
+        "--index=https://example.com/index",
+    ] {
+        let harness = Harness::new(&["cargo"]);
+        let output = harness.run(&["install", "--rust", "owner/tool", "--", argument]);
+        assert_eq!(output.status.code(), Some(2), "{argument}");
+        assert!(stderr(&output).contains("conflicts with dtr's resolved repository"));
+        assert!(!harness.was_invoked("cargo"));
+    }
+}
+
+#[test]
+fn rust_rejects_no_latest_and_go_rejects_cargo_arguments() {
+    let harness = Harness::new(&["cargo", "go"]);
+    let rust = harness.run(&["install", "--rust", "--no-latest", "owner/tool"]);
+    assert_eq!(rust.status.code(), Some(2));
+    assert!(stderr(&rust).contains("applies only to the Go installer"));
+    assert!(!harness.was_invoked("cargo"));
+
+    let go = harness.run(&["install", "--go", "owner/tool", "--", "--locked"]);
+    assert_eq!(go.status.code(), Some(2));
+    assert!(stderr(&go).contains("only by the Rust/Cargo installer"));
+    assert!(!harness.was_invoked("go"));
+}
+
+#[test]
+fn missing_cargo_and_cargo_exit_status_are_reported() {
+    let missing = Harness::new(&[]);
+    let output = missing.run(&["install", "--rust", "owner/tool"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("cargo is required"));
+
+    let failing = Harness::new(&["cargo"]);
+    let output = failing
+        .command(&["install", "--rust", "owner/tool"])
+        .env("DTR_TEST_EXIT", "17")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(17));
+}
+
+#[test]
+fn rust_install_auto_switches_github_git_auth_without_token_variables() {
+    let harness = Harness::new(&["cargo", "gh"]);
+    assert!(
+        harness
+            .run(&[
+                "config",
+                "set",
+                "github.auth.auto_switch",
+                "mevanlc,mike-clark-8192",
+            ])
+            .status
+            .success()
+    );
+
+    let output = harness.run(&["install", "--rust", "mike-clark-8192/tool"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let token_lookup = fs::read_to_string(harness.log.join("gh-auth-token")).unwrap();
+    assert!(token_lookup.contains("arg=<--user>\narg=<mike-clark-8192>\n"));
+
+    let cargo = harness.invocation("cargo");
+    assert_eq!(
+        cargo.args,
+        [
+            "install",
+            "--git",
+            "https://github.com/mike-clark-8192/tool.git",
+        ]
+    );
+    assert!(cargo.cargo_git_fetch_cli);
+    assert_eq!(cargo.git_config_count.as_deref(), Some("2"));
+    assert_eq!(
+        cargo.git_config_keys,
+        [
+            "http.https://github.com/.extraHeader",
+            "http.https://github.com/.extraHeader",
+        ]
+    );
+    assert!(cargo.git_auth_header_present);
+    assert_eq!(cargo.gh_token_account, None);
+    assert!(!cargo.github_token_present);
+}
+
+#[test]
+fn rust_auto_switch_extends_existing_process_git_configuration() {
+    let harness = Harness::new(&["cargo", "gh"]);
+    assert!(
+        harness
+            .run(&["config", "set", "github.auth.auto_switch", "mevanlc",])
+            .status
+            .success()
+    );
+
+    let output = harness
+        .command(&["install", "--rust", "mevanlc/tool"])
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "test.existing")
+        .env("GIT_CONFIG_VALUE_0", "preserved")
+        .env("GH_TOKEN", "parent-gh-token")
+        .env("GITHUB_TOKEN", "parent-github-token")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let cargo = harness.invocation("cargo");
+    assert_eq!(cargo.git_config_count.as_deref(), Some("3"));
+    assert_eq!(
+        cargo.git_config_keys,
+        [
+            "test.existing",
+            "http.https://github.com/.extraHeader",
+            "http.https://github.com/.extraHeader",
+        ]
+    );
+    assert!(cargo.git_auth_header_present);
+    assert_eq!(cargo.gh_token_account, None);
+    assert!(!cargo.github_token_present);
+}
+
+#[test]
+fn rust_auto_switch_fails_closed_before_cargo() {
+    let harness = Harness::new(&["cargo", "gh"]);
+    assert!(
+        harness
+            .run(&["config", "set", "github.auth.auto_switch", "mevanlc",])
+            .status
+            .success()
+    );
+    let output = harness
+        .command(&["install", "--rust", "mevanlc/tool"])
+        .env("DTR_TEST_GH_TOKEN_FAIL_ACCOUNT", "mevanlc")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("auto-switch account mevanlc"));
+    assert!(!harness.was_invoked("cargo"));
+}
+
+#[test]
+fn rust_auto_switch_explain_is_exact_and_secret_free() {
+    let harness = Harness::new(&["cargo", "gh"]);
+    assert!(
+        harness
+            .run(&[
+                "config",
+                "set",
+                "github.auth.auto_switch",
+                "mike-clark-8192",
+            ])
+            .status
+            .success()
+    );
+    let output = harness.run(&[
+        "-n",
+        "install",
+        "--rust",
+        "mike-clark-8192/tool",
+        "--",
+        "--locked",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "repospec: GitHub repository mike-clark-8192/tool\n\
+backend:  cargo\n\
+auth:     auto-switch to mike-clark-8192 (process-scoped; active gh account unchanged)\n\
+command:  cargo install --git https://github.com/mike-clark-8192/tool.git --locked\n"
+    );
+    assert!(!stdout(&output).contains("token"));
+    assert!(!stdout(&output).contains("Authorization"));
+    assert!(harness.was_invoked("gh-auth-token"));
+    assert!(!harness.was_invoked("cargo"));
+}
+
+#[test]
+fn unmatched_and_bare_rust_installs_do_not_auto_switch() {
+    let harness = Harness::new(&["cargo", "gh"]);
+    assert!(
+        harness
+            .run(&["config", "set", "github.auth.auto_switch", "mevanlc",])
+            .status
+            .success()
+    );
+    for repository in ["cli/cli", "my-tool"] {
+        let output = harness.run(&["install", "--rust", repository]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let cargo = harness.invocation("cargo");
+        assert!(!cargo.cargo_git_fetch_cli);
+        assert!(!cargo.git_auth_header_present);
+        assert!(!harness.was_invoked("gh-auth-token"));
+    }
 }
 
 #[test]

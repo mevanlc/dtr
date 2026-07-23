@@ -4,7 +4,7 @@
 
 It accepts the repository reference you already have, resolves what it means,
 and invokes the appropriate underlying tool. It supports forge-aware cloning,
-process-scoped GitHub account selection, and Go tool installation from
+process-scoped GitHub account selection, and Rust and Go tool installation from
 repositories on macOS and Linux.
 
 ```console
@@ -18,6 +18,11 @@ $ dtr --explain install --go https://github.com/hjr265/gittop
 repospec: GitHub repository hjr265/gittop
 backend:  go
 command:  go install github.com/hjr265/gittop@latest
+
+$ dtr --explain install --rust hjr265/gittop -- --locked
+repospec: GitHub repository hjr265/gittop
+backend:  cargo
+command:  cargo install --git https://github.com/hjr265/gittop.git --locked
 
 $ dtr config set github.auth.auto_switch mevanlc,mike-clark-8192
 $ dtr --explain clone mike-clark-8192/foo
@@ -41,6 +46,7 @@ Cloning requires Git. Depending on the operation, dtr also uses:
 - [`gh`](https://cli.github.com/) for GitHub-aware cloning and resolving the
   owner of a bare repository name.
 - [`glab`](https://docs.gitlab.com/cli/) for GitLab-aware cloning.
+- Cargo for `dtr install --rust` or its `--cargo` alias.
 - Go for `dtr install --go`.
 
 When a forge CLI is unavailable, an owner-qualified GitHub or URL-qualified
@@ -110,9 +116,16 @@ dtr config set github.auth.auto_switch mevanlc,mike-clark-8192
 
 When the explicit owner in `owner/repo` or a GitHub URL matches an account in
 that allowlist, dtr obtains that account's stored token from `gh` and supplies it
-to the clone process through `GH_TOKEN`. It does not run `gh auth switch` or
-change the active GitHub CLI account. The clone uses HTTPS because selecting a
-token does not select an SSH key.
+only to the clone or Rust-install child process. It does not run `gh auth switch`
+or change the active GitHub CLI account. The operation uses HTTPS because
+selecting a token does not select an SSH key.
+
+GitHub-aware clones receive the token through `GH_TOKEN`. Rust installs use
+Cargo's Git-CLI mode and process-scoped Git configuration containing a
+URL-specific authorization header. Dtr extends any existing process-scoped Git
+configuration and removes inherited `GH_TOKEN` and `GITHUB_TOKEN` from the Cargo
+child. Neither mode writes the token to disk or includes it in command arguments,
+explain output, or errors.
 
 An unmatched owner and a bare repository name retain normal active-account
 behavior. If an owner matches the allowlist but its stored token cannot be
@@ -130,19 +143,37 @@ Configuration is stored in `$XDG_CONFIG_HOME/dtr/config.toml`, or
 `DTR_CONFIG_DIR` overrides the containing directory. The file contains account
 names only; dtr never writes GitHub tokens to it.
 
-The selected identity is scoped to cloning. The resulting checkout is not
-persistently bound to that identity for later `git fetch` or `git push`
-operations.
+The selected identity is scoped to the clone or install process. A resulting
+checkout is not persistently bound to that identity for later `git fetch` or
+`git push` operations.
 
 ## Install from a repository
 
 ```text
 dtr [--explain|-n] install|i --go [--no-latest] <dtr-repospec>
+dtr [--explain|-n] install|i <--rust|--cargo> <dtr-repospec> [-- <cargo-install-arg>...]
 ```
 
 `install` is deliberately repo-oriented. Dtr does not wrap the package-registry
 surface that `cargo install`, `go install`, `uv tool install`, `pipx install`,
 and `npm install -g` already provide well.
+
+Rust repositories map to Cargo's native source modes:
+
+```sh
+dtr install --rust ./my-tool
+# cargo install --path ./my-tool
+
+dtr install --cargo hjr265/gittop -- --locked --features color
+# cargo install --git https://github.com/hjr265/gittop.git --locked --features color
+```
+
+`--rust` is the primary ecosystem spelling; `--cargo` is a visible alias.
+Native Cargo package and install options follow `--` and are forwarded exactly.
+Dtr rejects Cargo's `--git`, `--path`, `--registry`, and `--index` source options
+there because the repospec already selects the source. SCP-like Git remotes are
+converted to Cargo-compatible `ssh://` URLs; literal `scp://` and `sftp://`
+staging remain parked.
 
 Remote Go repository installs receive `@latest` by default:
 
@@ -180,6 +211,7 @@ without performing it:
 ```sh
 dtr -n clone -D owner/repo
 dtr --explain install --go owner/repo
+dtr --explain install --rust owner/repo -- --locked
 ```
 
 The position is intentional. Git already uses `clone -n` for `--no-checkout`,
@@ -200,13 +232,14 @@ starts the resolved clone/install operation or creates planned directories.
 - Forge browser-page URLs such as `/tree/` and `/-/blob/` are rejected rather
   than guessed at.
 - Literal `scp://` and `sftp://` staging is parked for a later milestone.
-- Go module paths that differ from their repository paths, monorepo command
-  selection, other install backends, GitLab/Enterprise account selection, and
-  Windows are later work.
+- Go module paths that differ from their repository paths, automatic package
+  selection in monorepos, uv/pipx/npm repository installs, GitLab/Enterprise
+  account selection, and Windows are later work.
 
 The design records and acceptance criteria live in
 [devdocs/PLAN-MVP00.md](devdocs/PLAN-MVP00.md) and
-[devdocs/PLAN-MVP01.md](devdocs/PLAN-MVP01.md).
+[devdocs/PLAN-MVP01.md](devdocs/PLAN-MVP01.md), and
+[devdocs/PLAN-MVP02.md](devdocs/PLAN-MVP02.md).
 
 ## Development
 
