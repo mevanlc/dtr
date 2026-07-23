@@ -62,6 +62,7 @@ impl Harness {
         let mut gh_token_account = None;
         let mut github_token_present = false;
         let mut cargo_git_fetch_cli = false;
+        let mut uv_no_github_fast_path = false;
         let mut git_config_count = None;
         let mut git_config_keys = Vec::new();
         let mut git_auth_header_present = false;
@@ -85,6 +86,8 @@ impl Harness {
                 github_token_present = true;
             } else if line == "cargo_git_fetch_cli=<true>" {
                 cargo_git_fetch_cli = true;
+            } else if line == "uv_no_github_fast_path=<true>" {
+                uv_no_github_fast_path = true;
             } else if let Some(value) = line
                 .strip_prefix("git_config_count=<")
                 .and_then(|line| line.strip_suffix('>'))
@@ -105,6 +108,7 @@ impl Harness {
             gh_token_account,
             github_token_present,
             cargo_git_fetch_cli,
+            uv_no_github_fast_path,
             git_config_count,
             git_config_keys,
             git_auth_header_present,
@@ -127,6 +131,7 @@ struct Invocation {
     gh_token_account: Option<String>,
     github_token_present: bool,
     cargo_git_fetch_cli: bool,
+    uv_no_github_fast_path: bool,
     git_config_count: Option<String>,
     git_config_keys: Vec<String>,
     git_auth_header_present: bool,
@@ -180,6 +185,9 @@ if [ -n "${GITHUB_TOKEN-}" ]; then
 fi
 if [ "${CARGO_NET_GIT_FETCH_WITH_CLI-}" = true ]; then
   printf 'cargo_git_fetch_cli=<true>\n' >> "$log"
+fi
+if [ "${UV_NO_GITHUB_FAST_PATH-}" = true ]; then
+  printf 'uv_no_github_fast_path=<true>\n' >> "$log"
 fi
 if [ -n "${GIT_CONFIG_COUNT-}" ]; then
   printf 'git_config_count=<%s>\n' "$GIT_CONFIG_COUNT" >> "$log"
@@ -707,7 +715,7 @@ fn rust_rejects_no_latest_and_go_rejects_cargo_arguments() {
 
     let go = harness.run(&["install", "--go", "owner/tool", "--", "--locked"]);
     assert_eq!(go.status.code(), Some(2));
-    assert!(stderr(&go).contains("only by the Rust/Cargo installer"));
+    assert!(stderr(&go).contains("Rust/Cargo, uv, and pipx installers"));
     assert!(!harness.was_invoked("go"));
 }
 
@@ -876,6 +884,265 @@ fn unmatched_and_bare_rust_installs_do_not_auto_switch() {
         assert!(!cargo.cargo_git_fetch_cli);
         assert!(!cargo.git_auth_header_present);
         assert!(!harness.was_invoked("gh-auth-token"));
+    }
+}
+
+#[test]
+fn python_local_installs_map_to_exact_uv_and_pipx_commands() {
+    let uv = Harness::new(&["uv"]);
+    let output = uv.run(&[
+        "install",
+        "--uv",
+        "./local repo",
+        "--",
+        "--python",
+        "3.14",
+        "--force",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        uv.invocation("uv").args,
+        [
+            "tool",
+            "install",
+            "./local repo",
+            "--python",
+            "3.14",
+            "--force",
+        ]
+    );
+
+    let pipx = Harness::new(&["pipx"]);
+    let output = pipx.run(&[
+        "install",
+        "--pipx",
+        "./local repo",
+        "--",
+        "--python=3.14",
+        "--force",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        pipx.invocation("pipx").args,
+        ["install", "--python=3.14", "--force", "--", "./local repo",]
+    );
+}
+
+#[test]
+fn python_remote_repositories_map_to_vcs_requirements() {
+    let cases: &[(&str, &str)] = &[
+        ("owner/tool", "git+https://github.com/owner/tool.git"),
+        (
+            "http://gitlab.com/group/subgroup/tool",
+            "git+https://gitlab.com/group/subgroup/tool.git",
+        ),
+        (
+            "ssh://git@example.com/srv/tool.git",
+            "git+ssh://git@example.com/srv/tool.git",
+        ),
+        (
+            "git@example.com:owner/tool.git",
+            "git+ssh://git@example.com/~/owner/tool.git",
+        ),
+        (
+            "git@example.com:/srv/tool.git",
+            "git+ssh://git@example.com/srv/tool.git",
+        ),
+    ];
+
+    for (repospec, source) in cases {
+        let uv = Harness::new(&["uv"]);
+        let output = uv.run(&["install", "--uv", repospec]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(uv.invocation("uv").args, ["tool", "install", source]);
+
+        let pipx = Harness::new(&["pipx"]);
+        let output = pipx.run(&["install", "--pipx", repospec]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(pipx.invocation("pipx").args, ["install", "--", source]);
+    }
+}
+
+#[test]
+fn bare_python_repo_uses_the_active_github_owner() {
+    for backend in ["--uv", "--pipx"] {
+        let program = backend.trim_start_matches("--");
+        let harness = Harness::new(&[program, "gh"]);
+        let output = harness.run(&["install", backend, "my-tool"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let invocation = harness.invocation(program);
+        assert!(
+            invocation
+                .args
+                .contains(&"git+https://github.com/mevanlc/my-tool.git".to_owned())
+        );
+        assert!(!harness.was_invoked("gh-auth-token"));
+    }
+}
+
+#[test]
+fn pipx_native_arguments_cannot_add_or_replace_a_source() {
+    for argument in [
+        "another-package",
+        "3.14",
+        "--",
+        "--lock",
+        "--lock=pylock.toml",
+    ] {
+        let harness = Harness::new(&["pipx"]);
+        let output = harness.run(&["install", "--pipx", "owner/tool", "--", argument]);
+        assert_eq!(output.status.code(), Some(2), "{argument}");
+        assert!(!harness.was_invoked("pipx"));
+    }
+}
+
+#[test]
+fn python_installers_reject_go_options_and_propagate_failures() {
+    for backend in ["--uv", "--pipx"] {
+        let program = backend.trim_start_matches("--");
+        let harness = Harness::new(&[program]);
+        let rejected = harness.run(&["install", backend, "--no-latest", "owner/tool"]);
+        assert_eq!(rejected.status.code(), Some(2));
+        assert!(stderr(&rejected).contains("only to the Go installer"));
+        assert!(!harness.was_invoked(program));
+
+        let failed = harness
+            .command(&["install", backend, "owner/tool"])
+            .env("DTR_TEST_EXIT", "19")
+            .output()
+            .unwrap();
+        assert_eq!(failed.status.code(), Some(19));
+
+        let missing = Harness::new(&[]);
+        let output = missing.run(&["install", backend, "owner/tool"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(stderr(&output).contains(&format!("{program} is required")));
+    }
+}
+
+#[test]
+fn python_install_auto_switches_with_git_http_auth_only() {
+    for backend in ["--uv", "--pipx"] {
+        let program = backend.trim_start_matches("--");
+        let harness = Harness::new(&[program, "gh"]);
+        assert!(
+            harness
+                .run(&[
+                    "config",
+                    "set",
+                    "github.auth.auto_switch",
+                    "mevanlc,mike-clark-8192",
+                ])
+                .status
+                .success()
+        );
+
+        let output = harness
+            .command(&["install", backend, "mike-clark-8192/tool"])
+            .env("GH_TOKEN", "parent-gh-token")
+            .env("GITHUB_TOKEN", "parent-github-token")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let invocation = harness.invocation(program);
+        assert!(invocation.uv_no_github_fast_path);
+        assert_eq!(invocation.git_config_count.as_deref(), Some("2"));
+        assert_eq!(
+            invocation.git_config_keys,
+            [
+                "http.https://github.com/.extraHeader",
+                "http.https://github.com/.extraHeader",
+            ]
+        );
+        assert!(invocation.git_auth_header_present);
+        assert_eq!(invocation.gh_token_account, None);
+        assert!(!invocation.github_token_present);
+    }
+}
+
+#[test]
+fn python_auto_switch_extends_existing_git_config_and_fails_closed() {
+    let harness = Harness::new(&["uv", "gh"]);
+    assert!(
+        harness
+            .run(&["config", "set", "github.auth.auto_switch", "mevanlc"])
+            .status
+            .success()
+    );
+    let output = harness
+        .command(&["install", "--uv", "mevanlc/tool"])
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "test.existing")
+        .env("GIT_CONFIG_VALUE_0", "preserved")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let uv = harness.invocation("uv");
+    assert_eq!(uv.git_config_count.as_deref(), Some("3"));
+    assert_eq!(uv.git_config_keys[0], "test.existing");
+    assert!(uv.git_auth_header_present);
+
+    let failed = Harness::new(&["uv", "gh"]);
+    assert!(
+        failed
+            .run(&["config", "set", "github.auth.auto_switch", "mevanlc"])
+            .status
+            .success()
+    );
+    let output = failed
+        .command(&["install", "--uv", "mevanlc/tool"])
+        .env("DTR_TEST_GH_TOKEN_FAIL_ACCOUNT", "mevanlc")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!failed.was_invoked("uv"));
+}
+
+#[test]
+fn python_auto_switch_explain_is_exact_and_secret_free() {
+    let harness = Harness::new(&["uv", "gh"]);
+    assert!(
+        harness
+            .run(&[
+                "config",
+                "set",
+                "github.auth.auto_switch",
+                "mike-clark-8192",
+            ])
+            .status
+            .success()
+    );
+    let output = harness.run(&[
+        "-n",
+        "install",
+        "--uv",
+        "mike-clark-8192/tool",
+        "--",
+        "--force",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "repospec: GitHub repository mike-clark-8192/tool\n\
+backend:  uv\n\
+auth:     auto-switch to mike-clark-8192 (process-scoped; active gh account unchanged)\n\
+command:  uv tool install git+https://github.com/mike-clark-8192/tool.git --force\n"
+    );
+    assert!(!stdout(&output).contains("token"));
+    assert!(!stdout(&output).contains("Authorization"));
+    assert!(!harness.was_invoked("uv"));
+}
+
+#[test]
+fn unmatched_python_owners_do_not_auto_switch() {
+    for backend in ["--uv", "--pipx"] {
+        let program = backend.trim_start_matches("--");
+        let harness = Harness::new(&[program]);
+        let output = harness.run(&["install", backend, "cli/cli"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let invocation = harness.invocation(program);
+        assert!(!invocation.uv_no_github_fast_path);
+        assert!(!invocation.git_auth_header_present);
     }
 }
 

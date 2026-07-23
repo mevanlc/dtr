@@ -62,14 +62,35 @@ pub(crate) fn select_for_owner(owner: &str) -> Result<Option<GithubAuthSelection
 pub(crate) fn cargo_git_environment(
     token: &str,
 ) -> Result<(Vec<SecretEnvironment>, Vec<OsString>), DtrError> {
+    github_git_environment(
+        token,
+        vec![SecretEnvironment::new(
+            "CARGO_NET_GIT_FETCH_WITH_CLI",
+            "true",
+        )],
+    )
+}
+
+pub(crate) fn python_git_environment(
+    token: &str,
+) -> Result<(Vec<SecretEnvironment>, Vec<OsString>), DtrError> {
+    github_git_environment(
+        token,
+        vec![SecretEnvironment::new("UV_NO_GITHUB_FAST_PATH", "true")],
+    )
+}
+
+fn github_git_environment(
+    token: &str,
+    mut environment: Vec<SecretEnvironment>,
+) -> Result<(Vec<SecretEnvironment>, Vec<OsString>), DtrError> {
     let count_value = env::var_os("GIT_CONFIG_COUNT");
     let count = git_config_count_from(count_value.as_deref())?;
     let next_count = count
         .checked_add(2)
         .ok_or_else(|| DtrError::new("GIT_CONFIG_COUNT is too large to extend safely"))?;
     let header_key = "http.https://github.com/.extraHeader";
-    let environment = vec![
-        SecretEnvironment::new("CARGO_NET_GIT_FETCH_WITH_CLI", "true"),
+    environment.extend([
         SecretEnvironment::new("GIT_CONFIG_COUNT", next_count.to_string()),
         SecretEnvironment::new(format!("GIT_CONFIG_KEY_{count}"), header_key),
         SecretEnvironment::new(format!("GIT_CONFIG_VALUE_{count}"), ""),
@@ -78,7 +99,7 @@ pub(crate) fn cargo_git_environment(
             format!("GIT_CONFIG_VALUE_{}", count + 1),
             authorization_header(token),
         ),
-    ];
+    ]);
     Ok((
         environment,
         ["GH_TOKEN", "GITHUB_TOKEN"].map(OsString::from).to_vec(),

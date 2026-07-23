@@ -4,8 +4,8 @@
 
 It accepts the repository reference you already have, resolves what it means,
 and invokes the appropriate underlying tool. It supports forge-aware cloning,
-process-scoped GitHub account selection, and Rust and Go tool installation from
-repositories on macOS and Linux.
+process-scoped GitHub account selection, and Rust, Go, and Python tool
+installation from repositories on macOS and Linux.
 
 ```console
 $ dtr --explain clone --depth 1 -O hjr265/gittop
@@ -23,6 +23,11 @@ $ dtr --explain install --rust hjr265/gittop -- --locked
 repospec: GitHub repository hjr265/gittop
 backend:  cargo
 command:  cargo install --git https://github.com/hjr265/gittop.git --locked
+
+$ dtr --explain install --uv astral-sh/ruff -- --force
+repospec: GitHub repository astral-sh/ruff
+backend:  uv
+command:  uv tool install git+https://github.com/astral-sh/ruff.git --force
 
 $ dtr config set github.auth.auto_switch mevanlc,mike-clark-8192
 $ dtr --explain clone mike-clark-8192/foo
@@ -48,6 +53,8 @@ Cloning requires Git. Depending on the operation, dtr also uses:
 - [`glab`](https://docs.gitlab.com/cli/) for GitLab-aware cloning.
 - Cargo for `dtr install --rust` or its `--cargo` alias.
 - Go for `dtr install --go`.
+- uv for `dtr install --uv`.
+- pipx for `dtr install --pipx`.
 
 When a forge CLI is unavailable, an owner-qualified GitHub or URL-qualified
 GitLab repository falls back to `git clone`. A bare repository name requires
@@ -115,16 +122,16 @@ dtr config set github.auth.auto_switch mevanlc,mike-clark-8192
 ```
 
 When the explicit owner in `owner/repo` or a GitHub URL matches an account in
-that allowlist, dtr obtains that account's stored token from `gh` and supplies it
-only to the clone or Rust-install child process. It does not run `gh auth switch`
-or change the active GitHub CLI account. The operation uses HTTPS because
-selecting a token does not select an SSH key.
+that allowlist, dtr obtains that account's stored token from `gh` and supplies
+process-scoped authentication only to the clone or remote-install child. It does
+not run `gh auth switch` or change the active GitHub CLI account. The operation
+uses HTTPS because selecting a token does not select an SSH key.
 
-GitHub-aware clones receive the token through `GH_TOKEN`. Rust installs use
-Cargo's Git-CLI mode and process-scoped Git configuration containing a
+GitHub-aware clones receive the token through `GH_TOKEN`. Rust and Python remote
+installs use the Git CLI and process-scoped Git configuration containing a
 URL-specific authorization header. Dtr extends any existing process-scoped Git
-configuration and removes inherited `GH_TOKEN` and `GITHUB_TOKEN` from the Cargo
-child. Neither mode writes the token to disk or includes it in command arguments,
+configuration and removes inherited `GH_TOKEN` and `GITHUB_TOKEN` from installer
+children. No mode writes the token to disk or includes it in command arguments,
 explain output, or errors.
 
 An unmatched owner and a bare repository name retain normal active-account
@@ -152,6 +159,8 @@ checkout is not persistently bound to that identity for later `git fetch` or
 ```text
 dtr [--explain|-n] install|i --go [--no-latest] <dtr-repospec>
 dtr [--explain|-n] install|i <--rust|--cargo> <dtr-repospec> [-- <cargo-install-arg>...]
+dtr [--explain|-n] install|i --uv <dtr-repospec> [-- <uv-tool-install-arg>...]
+dtr [--explain|-n] install|i --pipx <dtr-repospec> [-- <pipx-install-option>...]
 ```
 
 `install` is deliberately repo-oriented. Dtr does not wrap the package-registry
@@ -174,6 +183,22 @@ Dtr rejects Cargo's `--git`, `--path`, `--registry`, and `--index` source option
 there because the repospec already selects the source. SCP-like Git remotes are
 converted to Cargo-compatible `ssh://` URLs; literal `scp://` and `sftp://`
 staging remain parked.
+
+Python repositories map to local package paths or `git+<URL>` VCS requirements:
+
+```sh
+dtr install --uv ./my-tool -- --force
+# uv tool install ./my-tool --force
+
+dtr install --pipx owner/my-tool -- --python=3.14 --force
+# pipx install --python=3.14 --force -- git+https://github.com/owner/my-tool.git
+```
+
+Uv native arguments retain their normal tokenization after dtr's `--`. Because
+current pipx can install multiple positional package specs at once, dtr accepts
+only option-shaped pipx arguments and puts its one resolved source after pipx's
+own `--`. Values therefore use attached forms such as `--python=3.14`; `--lock`
+is rejected as a conflicting alternate source.
 
 Remote Go repository installs receive `@latest` by default:
 
@@ -212,6 +237,7 @@ without performing it:
 dtr -n clone -D owner/repo
 dtr --explain install --go owner/repo
 dtr --explain install --rust owner/repo -- --locked
+dtr --explain install --uv owner/repo -- --force
 ```
 
 The position is intentional. Git already uses `clone -n` for `--no-checkout`,
@@ -233,14 +259,15 @@ starts the resolved clone/install operation or creates planned directories.
   than guessed at.
 - Literal `scp://` and `sftp://` staging is parked for a later milestone.
 - Go module paths that differ from their repository paths, automatic package
-  selection in monorepos, uv/pipx/npm repository installs, GitLab/Enterprise
-  account selection, and Windows are later work.
+  selection in monorepos, npm repository installs, GitLab/Enterprise account
+  selection, and Windows are later work.
 
 The overall finish line and phase status live in
 [devdocs/FIRST-MVP.md](devdocs/FIRST-MVP.md). Detailed design records and
 acceptance criteria live in [devdocs/PLAN-MVP00.md](devdocs/PLAN-MVP00.md),
-[devdocs/PLAN-MVP01.md](devdocs/PLAN-MVP01.md), and
-[devdocs/PLAN-MVP02.md](devdocs/PLAN-MVP02.md).
+[devdocs/PLAN-MVP01.md](devdocs/PLAN-MVP01.md),
+[devdocs/PLAN-MVP02.md](devdocs/PLAN-MVP02.md), and
+[devdocs/PLAN-MVP03.md](devdocs/PLAN-MVP03.md).
 
 ## Development
 

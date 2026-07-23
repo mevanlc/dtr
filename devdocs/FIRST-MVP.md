@@ -1,6 +1,6 @@
 # dtr first MVP roadmap
 
-Status: in progress — 3 of 5 phases complete (2026-07-23)
+Status: in progress — 4 of 5 phases complete (2026-07-23)
 
 ## Document hierarchy
 
@@ -42,19 +42,18 @@ local-filesystem, Git-remote, and forge-aware repository surfaces.
 | [MVP00](PLAN-MVP00.md) | Complete | Common repospec resolver, clone, Go repository install, explain, and macOS/Linux foundation. |
 | [MVP01](PLAN-MVP01.md) | Complete | Configuration and race-free, process-scoped GitHub account auto-switching. |
 | [MVP02](PLAN-MVP02.md) | Complete | Rust/Cargo local and Git repository installation, including GitHub auth propagation. |
-| MVP03 | Planned | Python repository installation through explicit `--uv` and `--pipx` backends. |
+| [MVP03](PLAN-MVP03.md) | Complete | Python repository installation through explicit `--uv` and `--pipx` backends. |
 | MVP04 | Planned | npm repository installation plus cross-backend consistency, documentation, and first-MVP release closure. |
 
-This is 3 of 5 phases complete. That fraction describes roadmap position, not
+This is 4 of 5 phases complete. That fraction describes roadmap position, not
 effort: phases are intentionally scoped around coherent, independently
 validated product increments rather than equal amounts of work.
 
-## Remaining phase intent
+## Phase intent
 
-### MVP03 — Python repository installation
+### MVP03 — Python repository installation (complete)
 
-Before implementation, `PLAN-MVP03.md` will settle the exact native uv and pipx
-source forms. Its intended boundary is:
+[PLAN-MVP03.md](PLAN-MVP03.md) defines and validates:
 
 - `dtr install --uv <dtr-repospec>`.
 - `dtr install --pipx <dtr-repospec>`.

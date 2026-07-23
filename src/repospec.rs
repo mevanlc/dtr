@@ -296,13 +296,13 @@ impl RepoSpec {
         }
     }
 
-    pub(crate) fn cargo_git_remote(
+    pub(crate) fn install_git_remote(
         &self,
         github_owner: Option<&str>,
     ) -> Result<OsString, DtrError> {
         match self {
             Self::Local { .. } => Err(DtrError::new(
-                "local repositories use cargo install --path, not --git",
+                "local repositories use an installer path source, not a Git remote",
             )),
             Self::Forge {
                 host,
@@ -319,6 +319,20 @@ impl RepoSpec {
                 Ok(format!("https://github.com/{owner}/{repo}.git").into())
             }
         }
+    }
+
+    pub(crate) fn python_package_source(
+        &self,
+        github_owner: Option<&str>,
+    ) -> Result<OsString, DtrError> {
+        if let Self::Local { path } = self {
+            return Ok(path.as_os_str().to_os_string());
+        }
+        let remote = self.install_git_remote(github_owner)?;
+        let remote = remote
+            .to_str()
+            .expect("non-local Git repository references are UTF-8");
+        Ok(format!("git+{remote}").into())
     }
 
     pub(crate) fn is_local(&self) -> bool {
@@ -561,21 +575,24 @@ mod tests {
     }
 
     #[test]
-    fn cargo_remote_normalizes_forges_and_bare_github_names() {
+    fn install_remote_normalizes_forges_and_bare_github_names() {
         assert_eq!(
-            parse("owner/tool").cargo_git_remote(None).unwrap().to_str(),
+            parse("owner/tool")
+                .install_git_remote(None)
+                .unwrap()
+                .to_str(),
             Some("https://github.com/owner/tool.git")
         );
         assert_eq!(
             parse("http://gitlab.com/group/subgroup/tool")
-                .cargo_git_remote(None)
+                .install_git_remote(None)
                 .unwrap()
                 .to_str(),
             Some("https://gitlab.com/group/subgroup/tool.git")
         );
         assert_eq!(
             parse("tool")
-                .cargo_git_remote(Some("mevanlc"))
+                .install_git_remote(Some("mevanlc"))
                 .unwrap()
                 .to_str(),
             Some("https://github.com/mevanlc/tool.git")
@@ -583,25 +600,75 @@ mod tests {
     }
 
     #[test]
-    fn cargo_remote_preserves_generic_urls_and_converts_scp_like_paths() {
+    fn install_remote_preserves_generic_urls_and_converts_scp_like_paths() {
         let generic = "ssh://git@example.com/srv/tool.git";
         assert_eq!(
-            parse(generic).cargo_git_remote(None).unwrap().to_str(),
+            parse(generic).install_git_remote(None).unwrap().to_str(),
             Some(generic)
         );
         assert_eq!(
             parse("git@example.com:owner/tool.git")
-                .cargo_git_remote(None)
+                .install_git_remote(None)
                 .unwrap()
                 .to_str(),
             Some("ssh://git@example.com/~/owner/tool.git")
         );
         assert_eq!(
             parse("git@example.com:/srv/git/tool.git")
-                .cargo_git_remote(None)
+                .install_git_remote(None)
                 .unwrap()
                 .to_str(),
             Some("ssh://git@example.com/srv/git/tool.git")
+        );
+    }
+
+    #[test]
+    fn python_sources_preserve_paths_and_prefix_normalized_git_remotes() {
+        assert_eq!(
+            parse("./local tool").python_package_source(None).unwrap(),
+            OsString::from("./local tool")
+        );
+        assert_eq!(
+            parse("owner/tool")
+                .python_package_source(None)
+                .unwrap()
+                .to_str(),
+            Some("git+https://github.com/owner/tool.git")
+        );
+        assert_eq!(
+            parse("git@example.com:owner/tool.git")
+                .python_package_source(None)
+                .unwrap()
+                .to_str(),
+            Some("git+ssh://git@example.com/~/owner/tool.git")
+        );
+        assert_eq!(
+            parse("tool")
+                .python_package_source(Some("mevanlc"))
+                .unwrap()
+                .to_str(),
+            Some("git+https://github.com/mevanlc/tool.git")
+        );
+        assert_eq!(
+            parse("https://example.com/tool.git?ref=main")
+                .python_package_source(None)
+                .unwrap()
+                .to_str(),
+            Some("git+https://example.com/tool.git?ref=main")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn python_source_preserves_a_non_utf8_local_path() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let path = OsString::from_vec(b"./tool-\xff".to_vec());
+        let spec = RepoSpec::parse(&path).unwrap();
+        assert_eq!(spec.python_package_source(None).unwrap(), path);
+        assert_eq!(
+            spec.local_path().unwrap().as_os_str(),
+            OsStr::from_bytes(b"./tool-\xff")
         );
     }
 

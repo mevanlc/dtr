@@ -115,15 +115,19 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
 pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
     if args.go {
         plan_go_install(args)
-    } else {
+    } else if args.rust {
         plan_cargo_install(args)
+    } else if args.uv {
+        plan_python_install(args, PythonBackend::Uv)
+    } else {
+        plan_python_install(args, PythonBackend::Pipx)
     }
 }
 
 fn plan_go_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
-    if !args.cargo_args.is_empty() {
+    if !args.install_args.is_empty() {
         return Err(DtrError::new(
-            "arguments after -- are supported only by the Rust/Cargo installer in MVP02",
+            "arguments after -- are supported only by the Rust/Cargo, uv, and pipx installers",
         ));
     }
     require_command("go", "installing a Go command")?;
@@ -184,7 +188,7 @@ fn plan_cargo_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
             "--no-latest applies only to the Go installer",
         ));
     }
-    reject_cargo_source_arguments(&args.cargo_args)?;
+    reject_cargo_source_arguments(&args.install_args)?;
     require_command("cargo", "installing a Rust binary")?;
 
     let spec = RepoSpec::parse(&args.repospec)?;
@@ -203,7 +207,7 @@ fn plan_cargo_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
         } else {
             None
         };
-        let remote = spec.cargo_git_remote(owner.as_deref())?;
+        let remote = spec.install_git_remote(owner.as_deref())?;
         command_args.push("--git".into());
         command_args.push(remote);
 
@@ -222,7 +226,7 @@ fn plan_cargo_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
                 github_auth::cargo_git_environment(&selection.token)?;
         }
     }
-    command_args.extend(args.cargo_args);
+    command_args.extend(args.install_args);
 
     Ok(CommandPlan {
         program: "cargo".into(),
@@ -236,6 +240,117 @@ fn plan_cargo_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
         environment,
         removed_environment,
     })
+}
+
+#[derive(Clone, Copy)]
+enum PythonBackend {
+    Uv,
+    Pipx,
+}
+
+impl PythonBackend {
+    fn program(self) -> &'static str {
+        match self {
+            Self::Uv => "uv",
+            Self::Pipx => "pipx",
+        }
+    }
+
+    fn purpose(self) -> &'static str {
+        match self {
+            Self::Uv => "installing a Python tool with uv",
+            Self::Pipx => "installing a Python tool with pipx",
+        }
+    }
+}
+
+fn plan_python_install(args: InstallArgs, backend: PythonBackend) -> Result<CommandPlan, DtrError> {
+    if args.no_latest {
+        return Err(DtrError::new(
+            "--no-latest applies only to the Go installer",
+        ));
+    }
+    if matches!(backend, PythonBackend::Pipx) {
+        validate_pipx_arguments(&args.install_args)?;
+    }
+    require_command(backend.program(), backend.purpose())?;
+
+    let spec = RepoSpec::parse(&args.repospec)?;
+    let repospec = spec.description();
+    let owner = if matches!(spec, RepoSpec::GithubMine { .. }) {
+        Some(resolve_github_owner()?)
+    } else {
+        None
+    };
+    let source = spec.python_package_source(owner.as_deref())?;
+    let mut auth = None;
+    let mut environment = Vec::new();
+    let mut removed_environment = Vec::new();
+
+    if let RepoSpec::Forge {
+        forge: Forge::GitHub,
+        namespace,
+        ..
+    } = &spec
+        && let Some(selection) = github_auth::select_for_owner(&namespace[0])?
+    {
+        auth = Some(format!(
+            "auto-switch to {} (process-scoped; active gh account unchanged)",
+            selection.account
+        ));
+        (environment, removed_environment) = github_auth::python_git_environment(&selection.token)?;
+    }
+
+    let command_args = match backend {
+        PythonBackend::Uv => {
+            let mut command_args = vec!["tool".into(), "install".into(), source];
+            command_args.extend(args.install_args);
+            command_args
+        }
+        PythonBackend::Pipx => {
+            let mut command_args = vec![OsString::from("install")];
+            command_args.extend(args.install_args);
+            command_args.extend([OsString::from("--"), source]);
+            command_args
+        }
+    };
+
+    Ok(CommandPlan {
+        program: backend.program().into(),
+        args: command_args,
+        current_dir: None,
+        target_dir: None,
+        preparations: Vec::new(),
+        repospec,
+        backend: backend.program(),
+        auth,
+        environment,
+        removed_environment,
+    })
+}
+
+fn validate_pipx_arguments(arguments: &[OsString]) -> Result<(), DtrError> {
+    for argument in arguments {
+        let bytes = argument.as_encoded_bytes();
+        if bytes.first() != Some(&b'-') {
+            return Err(DtrError::new(
+                "pipx option values after -- must use an attached spelling such as --python=3.14; a separate value could be another package spec",
+            ));
+        }
+        if argument == "--" {
+            return Err(DtrError::new(
+                "a forwarded -- would bypass dtr's single-source pipx boundary",
+            ));
+        }
+        if let Some(argument) = argument.to_str()
+            && (argument == "--lock" || argument.starts_with("--lock="))
+        {
+            return Err(DtrError::new(
+                "pipx source option --lock conflicts with dtr's resolved repository",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn reject_cargo_source_arguments(arguments: &[OsString]) -> Result<(), DtrError> {
@@ -488,6 +603,30 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn pipx_arguments_preserve_only_unambiguous_options() {
+        assert!(
+            validate_pipx_arguments(
+                ["--python=3.14", "--force", "-q"]
+                    .map(OsString::from)
+                    .as_ref()
+            )
+            .is_ok()
+        );
+        for argument in [
+            "3.14",
+            "another-package",
+            "--",
+            "--lock",
+            "--lock=pylock.toml",
+        ] {
+            assert!(
+                validate_pipx_arguments(&[argument.into()]).is_err(),
+                "{argument}"
+            );
+        }
     }
 
     #[cfg(unix)]
