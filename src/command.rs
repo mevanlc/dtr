@@ -64,12 +64,7 @@ impl CommandPlan {
 
         let mut command = Command::new(&self.program);
         command.args(&self.args);
-        for variable in &self.environment {
-            command.env(&variable.name, &variable.value);
-        }
-        for name in &self.removed_environment {
-            command.env_remove(name);
-        }
+        apply_environment(&mut command, &self.environment, &self.removed_environment);
         if let Some(directory) = &self.current_dir {
             command.current_dir(directory);
         }
@@ -88,6 +83,19 @@ impl CommandPlan {
             .map(shell_quote)
             .collect::<Vec<_>>()
             .join(" ")
+    }
+}
+
+pub(crate) fn apply_environment(
+    command: &mut Command,
+    environment: &[SecretEnvironment],
+    removed_environment: &[OsString],
+) {
+    for variable in environment {
+        command.env(&variable.name, &variable.value);
+    }
+    for name in removed_environment {
+        command.env_remove(name);
     }
 }
 

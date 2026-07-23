@@ -122,6 +122,18 @@ impl Harness {
     fn config_file(&self) -> PathBuf {
         self.config.join("config.toml")
     }
+
+    fn local_repository(&self, name: &str, files: &[&str], directories: &[&str]) -> String {
+        let repository = self.work.join(name);
+        fs::create_dir_all(&repository).unwrap();
+        for file in files {
+            fs::write(repository.join(file), "synthetic manifest\n").unwrap();
+        }
+        for directory in directories {
+            fs::create_dir_all(repository.join(directory)).unwrap();
+        }
+        format!("./{name}")
+    }
 }
 
 #[derive(Debug)]
@@ -156,6 +168,43 @@ if [ "${0##*/}" = gh ] && [ "${1-}" = api ] && [ "${2-}" = user ]; then
   exit 0
 fi
 
+if [ "${0##*/}" = gh ] && [ "${1-}" = api ] && [ "${2#repos/}" != "${2}" ]; then
+  log="${DTR_TEST_LOG_DIR}/gh-api-tree"
+  : > "$log"
+  printf 'cwd=<%s>\n' "$PWD" >> "$log"
+  case "${GH_TOKEN-}" in
+    token-*) printf 'gh_token_account=<%s>\n' "${GH_TOKEN#token-}" >> "$log" ;;
+    ?*) printf 'gh_token_account=<other>\n' >> "$log" ;;
+  esac
+  if [ -n "${GITHUB_TOKEN-}" ]; then
+    printf 'github_token_present=<yes>\n' >> "$log"
+  fi
+  for arg in "$@"; do
+    printf 'arg=<%s>\n' "$arg" >> "$log"
+  done
+  if [ -n "${DTR_TEST_GITHUB_TREE_JSON-}" ]; then
+    printf '%s\n' "$DTR_TEST_GITHUB_TREE_JSON"
+  else
+    printf '%s\n' '{"truncated":false,"tree":[]}'
+  fi
+  exit "${DTR_TEST_GITHUB_TREE_EXIT-0}"
+fi
+
+if [ "${0##*/}" = glab ] && [ "${1-}" = api ]; then
+  log="${DTR_TEST_LOG_DIR}/glab-api-tree"
+  : > "$log"
+  printf 'cwd=<%s>\n' "$PWD" >> "$log"
+  for arg in "$@"; do
+    printf 'arg=<%s>\n' "$arg" >> "$log"
+  done
+  if [ -n "${DTR_TEST_GITLAB_TREE_JSON-}" ]; then
+    printf '%s\n' "$DTR_TEST_GITLAB_TREE_JSON"
+  else
+    printf '%s\n' '[]'
+  fi
+  exit "${DTR_TEST_GITLAB_TREE_EXIT-0}"
+fi
+
 if [ "${0##*/}" = gh ] && [ "${1-}" = auth ] && [ "${2-}" = token ]; then
   log="${DTR_TEST_LOG_DIR}/gh-auth-token"
   : > "$log"
@@ -168,6 +217,47 @@ if [ "${0##*/}" = gh ] && [ "${1-}" = auth ] && [ "${2-}" = token ]; then
     exit 1
   fi
   printf 'token-%s\n' "${6-}"
+  exit 0
+fi
+
+if [ "${0##*/}" = git ] && [ "${1-}" = clone ] && [ -n "${DTR_TEST_GIT_TREE_MARKER-}" ]; then
+  log="${DTR_TEST_LOG_DIR}/git-inspection-clone"
+  : > "$log"
+  printf 'cwd=<%s>\n' "$PWD" >> "$log"
+  if [ -n "${GIT_CONFIG_COUNT-}" ]; then
+    printf 'git_config_count=<%s>\n' "$GIT_CONFIG_COUNT" >> "$log"
+  fi
+  for key in "${GIT_CONFIG_KEY_0-}" "${GIT_CONFIG_KEY_1-}" "${GIT_CONFIG_KEY_2-}"; do
+    if [ -n "$key" ]; then
+      printf 'git_config_key=<%s>\n' "$key" >> "$log"
+    fi
+  done
+  case "${GIT_CONFIG_VALUE_0-}${GIT_CONFIG_VALUE_1-}${GIT_CONFIG_VALUE_2-}" in
+    *'Authorization: Basic '*) printf 'git_auth_header_present=<yes>\n' >> "$log" ;;
+  esac
+  if [ -n "${GH_TOKEN-}" ]; then
+    printf 'gh_token_account=<other>\n' >> "$log"
+  fi
+  if [ -n "${GITHUB_TOKEN-}" ]; then
+    printf 'github_token_present=<yes>\n' >> "$log"
+  fi
+  destination=
+  for arg in "$@"; do
+    printf 'arg=<%s>\n' "$arg" >> "$log"
+    destination=$arg
+  done
+  mkdir -p "$destination"
+  exit "${DTR_TEST_GIT_CLONE_EXIT-0}"
+fi
+
+if [ "${0##*/}" = git ] && [ "${1-}" = -C ] && [ -n "${DTR_TEST_GIT_TREE_MARKER-}" ]; then
+  log="${DTR_TEST_LOG_DIR}/git-inspection-tree"
+  : > "$log"
+  printf 'cwd=<%s>\n' "$PWD" >> "$log"
+  for arg in "$@"; do
+    printf 'arg=<%s>\n' "$arg" >> "$log"
+  done
+  printf '100644 blob abc\t%s\0' "$DTR_TEST_GIT_TREE_MARKER"
   exit 0
 fi
 
@@ -606,11 +696,253 @@ fn clone_n_after_subcommand_remains_git_no_checkout() {
 }
 
 #[test]
+fn auto_local_install_selects_go_cargo_and_npm_from_root_manifests() {
+    let go = Harness::new(&["go"]);
+    let go_repo = go.local_repository("go-tool", &["go.mod"], &[]);
+    let output = go.run(&["install", &go_repo]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(go.invocation("go").args, ["install", "./..."]);
+    assert_eq!(
+        go.invocation("go").cwd,
+        go.work.join("go-tool").canonicalize().unwrap()
+    );
+
+    let cargo = Harness::new(&["cargo"]);
+    let cargo_repo = cargo.local_repository("cargo-tool", &["Cargo.toml"], &[]);
+    let output = cargo.run(&["install", &cargo_repo]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        cargo.invocation("cargo").args,
+        ["install", "--path", "./cargo-tool"]
+    );
+
+    let npm = Harness::new(&["npm"]);
+    let npm_repo = npm.local_repository("npm-tool", &["package.json"], &[]);
+    let output = npm.run(&["install", &npm_repo]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        npm.invocation("npm").args,
+        ["install", "--global", "--", "./npm-tool"]
+    );
+}
+
+#[test]
+fn auto_python_prefers_uv_and_falls_back_to_pipx() {
+    let uv = Harness::new(&["uv", "pipx"]);
+    let repository = uv.local_repository("python-tool", &["pyproject.toml", "setup.cfg"], &[]);
+    let output = uv.run(&["install", &repository]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        uv.invocation("uv").args,
+        ["tool", "install", "./python-tool"]
+    );
+    assert!(!uv.was_invoked("pipx"));
+
+    let pipx = Harness::new(&["pipx"]);
+    let repository = pipx.local_repository("legacy-python", &["setup.py"], &[]);
+    let output = pipx.run(&["install", &repository]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        pipx.invocation("pipx").args,
+        ["install", "--", "./legacy-python"]
+    );
+}
+
+#[test]
+fn auto_declines_missing_and_mixed_root_evidence_before_installing() {
+    let harness = Harness::new(&["cargo", "npm", "uv", "pipx", "go"]);
+    let mixed = harness.local_repository("mixed", &["Cargo.toml", "package.json"], &[]);
+    let output = harness.run(&["install", &mixed]);
+    assert_eq!(output.status.code(), Some(2));
+    let error = stderr(&output);
+    assert!(error.contains("Cargo.toml (cargo)"), "{error}");
+    assert!(error.contains("package.json (npm)"), "{error}");
+    assert!(error.contains("--tool <go|cargo|uv|pipx|npm>"), "{error}");
+
+    let empty = harness.local_repository("empty", &["README.md"], &["Cargo.toml"]);
+    let output = harness.run(&["install", &empty]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("no supported manifest"));
+    for program in ["cargo", "npm", "uv", "pipx", "go"] {
+        assert!(!harness.was_invoked(program), "{program}");
+    }
+}
+
+#[test]
+fn auto_github_api_detection_selects_backend_in_explain_mode() {
+    let harness = Harness::new(&["gh", "cargo"]);
+    let output = harness
+        .command(&["--explain", "install", "owner/tool"])
+        .env(
+            "DTR_TEST_GITHUB_TREE_JSON",
+            r#"{"truncated":false,"tree":[{"path":"Cargo.toml","type":"blob"}]}"#,
+        )
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "repospec: GitHub repository owner/tool\n\
+backend:  cargo\n\
+command:  cargo install --git https://github.com/owner/tool.git\n"
+    );
+    assert_eq!(
+        harness.invocation("gh-api-tree").args,
+        [
+            "api",
+            "repos/owner/tool/git/trees/HEAD",
+            "--hostname",
+            "github.com",
+        ]
+    );
+    assert!(!harness.was_invoked("cargo"));
+}
+
+#[test]
+fn auto_github_detection_reuses_process_scoped_account_selection() {
+    let harness = Harness::new(&["gh", "cargo"]);
+    assert!(
+        harness
+            .run(&[
+                "config",
+                "set",
+                "github.auth.auto_switch",
+                "mike-clark-8192",
+            ])
+            .status
+            .success()
+    );
+    let output = harness
+        .command(&["install", "mike-clark-8192/tool"])
+        .env(
+            "DTR_TEST_GITHUB_TREE_JSON",
+            r#"{"truncated":false,"tree":[{"path":"Cargo.toml","type":"blob"}]}"#,
+        )
+        .env("GH_TOKEN", "parent-gh-token")
+        .env("GITHUB_TOKEN", "parent-github-token")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let api = harness.invocation("gh-api-tree");
+    assert_eq!(api.gh_token_account.as_deref(), Some("mike-clark-8192"));
+    assert!(!api.github_token_present);
+    let cargo = harness.invocation("cargo");
+    assert!(cargo.cargo_git_fetch_cli);
+    assert!(cargo.git_auth_header_present);
+}
+
+#[test]
+fn auto_falls_back_from_forge_api_to_filtered_git_without_checkout() {
+    let harness = Harness::new(&["gh", "git", "npm"]);
+    assert!(
+        harness
+            .run(&["config", "set", "github.auth.auto_switch", "mevanlc",])
+            .status
+            .success()
+    );
+    let output = harness
+        .command(&["install", "mevanlc/tool"])
+        .env("DTR_TEST_GITHUB_TREE_EXIT", "1")
+        .env("DTR_TEST_GIT_TREE_MARKER", "package.json")
+        .env("GH_TOKEN", "parent-gh-token")
+        .env("GITHUB_TOKEN", "parent-github-token")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let clone = harness.invocation("git-inspection-clone");
+    assert_eq!(clone.args[0], "clone");
+    for option in [
+        "--depth=1",
+        "--single-branch",
+        "--no-tags",
+        "--filter=blob:none",
+        "--no-checkout",
+    ] {
+        assert!(clone.args.contains(&option.to_owned()), "{option:?}");
+    }
+    assert!(
+        clone
+            .args
+            .contains(&"https://github.com/mevanlc/tool.git".to_owned())
+    );
+    assert_eq!(clone.git_config_count.as_deref(), Some("2"));
+    assert!(clone.git_auth_header_present);
+    assert_eq!(clone.gh_token_account, None);
+    assert!(!clone.github_token_present);
+    assert_eq!(
+        harness.invocation("npm").args,
+        [
+            "install",
+            "--global",
+            "--",
+            "git+https://github.com/mevanlc/tool.git",
+        ]
+    );
+}
+
+#[test]
+fn auto_falls_back_when_github_api_tree_is_truncated_or_malformed() {
+    for tree_json in [
+        r#"{"truncated":true,"tree":[]}"#,
+        r#"{"not":"a tree response"}"#,
+    ] {
+        let harness = Harness::new(&["gh", "git", "cargo"]);
+        let output = harness
+            .command(&["--explain", "install", "owner/tool"])
+            .env("DTR_TEST_GITHUB_TREE_JSON", tree_json)
+            .env("DTR_TEST_GIT_TREE_MARKER", "Cargo.toml")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(harness.was_invoked("gh-api-tree"));
+        assert!(harness.was_invoked("git-inspection-clone"));
+        assert!(!harness.was_invoked("cargo"));
+    }
+}
+
+#[test]
+fn auto_gitlab_api_detection_uses_the_default_root_tree() {
+    let harness = Harness::new(&["glab", "go"]);
+    let output = harness
+        .command(&["install", "https://gitlab.com/group/subgroup/tool"])
+        .env(
+            "DTR_TEST_GITLAB_TREE_JSON",
+            r#"[{"name":"docs","type":"tree"}][{"name":"go.mod","type":"blob"}]"#,
+        )
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("go").args,
+        ["install", "gitlab.com/group/subgroup/tool@latest"]
+    );
+    let glab = harness.invocation("glab-api-tree");
+    assert!(
+        glab.args.contains(
+            &"projects/group%2Fsubgroup%2Ftool/repository/tree?pagination=keyset&per_page=100"
+                .to_owned()
+        )
+    );
+    assert!(glab.args.contains(&"--paginate".to_owned()));
+}
+
+#[test]
+fn explicit_tool_skips_repository_inspection() {
+    let harness = Harness::new(&["gh", "git", "cargo"]);
+    let output = harness.run(&["install", "--tool", "cargo", "owner/tool"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(harness.was_invoked("cargo"));
+    assert!(!harness.was_invoked("gh-api-tree"));
+    assert!(!harness.was_invoked("git-inspection-clone"));
+}
+
+#[test]
 fn rust_local_install_maps_to_cargo_path_and_preserves_native_arguments() {
     let harness = Harness::new(&["cargo"]);
     let output = harness.run(&[
         "install",
-        "--rust",
+        "--tool",
+        "cargo",
         "./local repo",
         "--",
         "--locked",
@@ -635,7 +967,7 @@ fn rust_local_install_maps_to_cargo_path_and_preserves_native_arguments() {
 fn cargo_alias_and_remote_repositories_map_to_cargo_git() {
     let cases: &[(&[&str], &[&str])] = &[
         (
-            &["install", "--cargo", "owner/tool", "--", "--locked"],
+            &["install", "--tool", "cargo", "owner/tool", "--", "--locked"],
             &[
                 "install",
                 "--git",
@@ -644,7 +976,12 @@ fn cargo_alias_and_remote_repositories_map_to_cargo_git() {
             ],
         ),
         (
-            &["install", "--rust", "http://gitlab.com/group/subgroup/tool"],
+            &[
+                "install",
+                "--tool",
+                "cargo",
+                "http://gitlab.com/group/subgroup/tool",
+            ],
             &[
                 "install",
                 "--git",
@@ -652,15 +989,30 @@ fn cargo_alias_and_remote_repositories_map_to_cargo_git() {
             ],
         ),
         (
-            &["install", "--rust", "ssh://git@example.com/srv/tool.git"],
+            &[
+                "install",
+                "--tool",
+                "cargo",
+                "ssh://git@example.com/srv/tool.git",
+            ],
             &["install", "--git", "ssh://git@example.com/srv/tool.git"],
         ),
         (
-            &["install", "--rust", "git@example.com:owner/tool.git"],
+            &[
+                "install",
+                "--tool",
+                "cargo",
+                "git@example.com:owner/tool.git",
+            ],
             &["install", "--git", "ssh://git@example.com/~/owner/tool.git"],
         ),
         (
-            &["install", "--rust", "git@example.com:/srv/tool.git"],
+            &[
+                "install",
+                "--tool",
+                "cargo",
+                "git@example.com:/srv/tool.git",
+            ],
             &["install", "--git", "ssh://git@example.com/srv/tool.git"],
         ),
     ];
@@ -676,7 +1028,7 @@ fn cargo_alias_and_remote_repositories_map_to_cargo_git() {
 #[test]
 fn bare_rust_repo_uses_the_active_github_owner() {
     let harness = Harness::new(&["cargo", "gh"]);
-    let output = harness.run(&["install", "--rust", "my-tool"]);
+    let output = harness.run(&["install", "--tool", "cargo", "my-tool"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         harness.invocation("cargo").args,
@@ -698,7 +1050,7 @@ fn cargo_source_arguments_cannot_replace_the_resolved_repository() {
         "--index=https://example.com/index",
     ] {
         let harness = Harness::new(&["cargo"]);
-        let output = harness.run(&["install", "--rust", "owner/tool", "--", argument]);
+        let output = harness.run(&["install", "--tool", "cargo", "owner/tool", "--", argument]);
         assert_eq!(output.status.code(), Some(2), "{argument}");
         assert!(stderr(&output).contains("conflicts with dtr's resolved repository"));
         assert!(!harness.was_invoked("cargo"));
@@ -708,27 +1060,27 @@ fn cargo_source_arguments_cannot_replace_the_resolved_repository() {
 #[test]
 fn rust_rejects_no_latest_and_go_rejects_cargo_arguments() {
     let harness = Harness::new(&["cargo", "go"]);
-    let rust = harness.run(&["install", "--rust", "--no-latest", "owner/tool"]);
-    assert_eq!(rust.status.code(), Some(2));
-    assert!(stderr(&rust).contains("applies only to the Go installer"));
+    let cargo = harness.run(&["install", "--tool", "cargo", "--no-latest", "owner/tool"]);
+    assert_eq!(cargo.status.code(), Some(2));
+    assert!(stderr(&cargo).contains("applies only to the Go installer"));
     assert!(!harness.was_invoked("cargo"));
 
-    let go = harness.run(&["install", "--go", "owner/tool", "--", "--locked"]);
+    let go = harness.run(&["install", "--tool", "go", "owner/tool", "--", "--locked"]);
     assert_eq!(go.status.code(), Some(2));
-    assert!(stderr(&go).contains("Rust/Cargo, uv, pipx, and npm installers"));
+    assert!(stderr(&go).contains("Cargo, uv, pipx, and npm installers"));
     assert!(!harness.was_invoked("go"));
 }
 
 #[test]
 fn missing_cargo_and_cargo_exit_status_are_reported() {
     let missing = Harness::new(&[]);
-    let output = missing.run(&["install", "--rust", "owner/tool"]);
+    let output = missing.run(&["install", "--tool", "cargo", "owner/tool"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr(&output).contains("cargo is required"));
 
     let failing = Harness::new(&["cargo"]);
     let output = failing
-        .command(&["install", "--rust", "owner/tool"])
+        .command(&["install", "--tool", "cargo", "owner/tool"])
         .env("DTR_TEST_EXIT", "17")
         .output()
         .unwrap();
@@ -750,7 +1102,7 @@ fn rust_install_auto_switches_github_git_auth_without_token_variables() {
             .success()
     );
 
-    let output = harness.run(&["install", "--rust", "mike-clark-8192/tool"]);
+    let output = harness.run(&["install", "--tool", "cargo", "mike-clark-8192/tool"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let token_lookup = fs::read_to_string(harness.log.join("gh-auth-token")).unwrap();
     assert!(token_lookup.contains("arg=<--user>\narg=<mike-clark-8192>\n"));
@@ -789,7 +1141,7 @@ fn rust_auto_switch_extends_existing_process_git_configuration() {
     );
 
     let output = harness
-        .command(&["install", "--rust", "mevanlc/tool"])
+        .command(&["install", "--tool", "cargo", "mevanlc/tool"])
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "test.existing")
         .env("GIT_CONFIG_VALUE_0", "preserved")
@@ -823,7 +1175,7 @@ fn rust_auto_switch_fails_closed_before_cargo() {
             .success()
     );
     let output = harness
-        .command(&["install", "--rust", "mevanlc/tool"])
+        .command(&["install", "--tool", "cargo", "mevanlc/tool"])
         .env("DTR_TEST_GH_TOKEN_FAIL_ACCOUNT", "mevanlc")
         .output()
         .unwrap();
@@ -849,7 +1201,8 @@ fn rust_auto_switch_explain_is_exact_and_secret_free() {
     let output = harness.run(&[
         "-n",
         "install",
-        "--rust",
+        "--tool",
+        "cargo",
         "mike-clark-8192/tool",
         "--",
         "--locked",
@@ -878,7 +1231,7 @@ fn unmatched_and_bare_rust_installs_do_not_auto_switch() {
             .success()
     );
     for repository in ["cli/cli", "my-tool"] {
-        let output = harness.run(&["install", "--rust", repository]);
+        let output = harness.run(&["install", "--tool", "cargo", repository]);
         assert!(output.status.success(), "{}", stderr(&output));
         let cargo = harness.invocation("cargo");
         assert!(!cargo.cargo_git_fetch_cli);
@@ -892,7 +1245,8 @@ fn python_local_installs_map_to_exact_uv_and_pipx_commands() {
     let uv = Harness::new(&["uv"]);
     let output = uv.run(&[
         "install",
-        "--uv",
+        "--tool",
+        "uv",
         "./local repo",
         "--",
         "--python",
@@ -915,7 +1269,8 @@ fn python_local_installs_map_to_exact_uv_and_pipx_commands() {
     let pipx = Harness::new(&["pipx"]);
     let output = pipx.run(&[
         "install",
-        "--pipx",
+        "--tool",
+        "pipx",
         "./local repo",
         "--",
         "--python=3.14",
@@ -956,12 +1311,12 @@ fn python_remote_repositories_map_to_vcs_requirements() {
 
     for (repospec, source) in cases {
         let uv = Harness::new(&["uv"]);
-        let output = uv.run(&["install", "--uv", repospec]);
+        let output = uv.run(&["install", "--tool", "uv", repospec]);
         assert!(output.status.success(), "{}", stderr(&output));
         assert_eq!(uv.invocation("uv").args, ["tool", "install", source]);
 
         let pipx = Harness::new(&["pipx"]);
-        let output = pipx.run(&["install", "--pipx", repospec]);
+        let output = pipx.run(&["install", "--tool", "pipx", repospec]);
         assert!(output.status.success(), "{}", stderr(&output));
         assert_eq!(pipx.invocation("pipx").args, ["install", "--", source]);
     }
@@ -969,12 +1324,11 @@ fn python_remote_repositories_map_to_vcs_requirements() {
 
 #[test]
 fn bare_python_repo_uses_the_active_github_owner() {
-    for backend in ["--uv", "--pipx"] {
-        let program = backend.trim_start_matches("--");
-        let harness = Harness::new(&[program, "gh"]);
-        let output = harness.run(&["install", backend, "my-tool"]);
+    for backend in ["uv", "pipx"] {
+        let harness = Harness::new(&[backend, "gh"]);
+        let output = harness.run(&["install", "--tool", backend, "my-tool"]);
         assert!(output.status.success(), "{}", stderr(&output));
-        let invocation = harness.invocation(program);
+        let invocation = harness.invocation(backend);
         assert!(
             invocation
                 .args
@@ -994,7 +1348,7 @@ fn pipx_native_arguments_cannot_add_or_replace_a_source() {
         "--lock=pylock.toml",
     ] {
         let harness = Harness::new(&["pipx"]);
-        let output = harness.run(&["install", "--pipx", "owner/tool", "--", argument]);
+        let output = harness.run(&["install", "--tool", "pipx", "owner/tool", "--", argument]);
         assert_eq!(output.status.code(), Some(2), "{argument}");
         assert!(!harness.was_invoked("pipx"));
     }
@@ -1002,33 +1356,31 @@ fn pipx_native_arguments_cannot_add_or_replace_a_source() {
 
 #[test]
 fn python_installers_reject_go_options_and_propagate_failures() {
-    for backend in ["--uv", "--pipx"] {
-        let program = backend.trim_start_matches("--");
-        let harness = Harness::new(&[program]);
-        let rejected = harness.run(&["install", backend, "--no-latest", "owner/tool"]);
+    for backend in ["uv", "pipx"] {
+        let harness = Harness::new(&[backend]);
+        let rejected = harness.run(&["install", "--tool", backend, "--no-latest", "owner/tool"]);
         assert_eq!(rejected.status.code(), Some(2));
         assert!(stderr(&rejected).contains("only to the Go installer"));
-        assert!(!harness.was_invoked(program));
+        assert!(!harness.was_invoked(backend));
 
         let failed = harness
-            .command(&["install", backend, "owner/tool"])
+            .command(&["install", "--tool", backend, "owner/tool"])
             .env("DTR_TEST_EXIT", "19")
             .output()
             .unwrap();
         assert_eq!(failed.status.code(), Some(19));
 
         let missing = Harness::new(&[]);
-        let output = missing.run(&["install", backend, "owner/tool"]);
+        let output = missing.run(&["install", "--tool", backend, "owner/tool"]);
         assert_eq!(output.status.code(), Some(2));
-        assert!(stderr(&output).contains(&format!("{program} is required")));
+        assert!(stderr(&output).contains(&format!("{backend} is required")));
     }
 }
 
 #[test]
 fn python_install_auto_switches_with_git_http_auth_only() {
-    for backend in ["--uv", "--pipx"] {
-        let program = backend.trim_start_matches("--");
-        let harness = Harness::new(&[program, "gh"]);
+    for backend in ["uv", "pipx"] {
+        let harness = Harness::new(&[backend, "gh"]);
         assert!(
             harness
                 .run(&[
@@ -1042,13 +1394,13 @@ fn python_install_auto_switches_with_git_http_auth_only() {
         );
 
         let output = harness
-            .command(&["install", backend, "mike-clark-8192/tool"])
+            .command(&["install", "--tool", backend, "mike-clark-8192/tool"])
             .env("GH_TOKEN", "parent-gh-token")
             .env("GITHUB_TOKEN", "parent-github-token")
             .output()
             .unwrap();
         assert!(output.status.success(), "{}", stderr(&output));
-        let invocation = harness.invocation(program);
+        let invocation = harness.invocation(backend);
         assert!(invocation.uv_no_github_fast_path);
         assert_eq!(invocation.git_config_count.as_deref(), Some("2"));
         assert_eq!(
@@ -1074,7 +1426,7 @@ fn python_auto_switch_extends_existing_git_config_and_fails_closed() {
             .success()
     );
     let output = harness
-        .command(&["install", "--uv", "mevanlc/tool"])
+        .command(&["install", "--tool", "uv", "mevanlc/tool"])
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "test.existing")
         .env("GIT_CONFIG_VALUE_0", "preserved")
@@ -1094,7 +1446,7 @@ fn python_auto_switch_extends_existing_git_config_and_fails_closed() {
             .success()
     );
     let output = failed
-        .command(&["install", "--uv", "mevanlc/tool"])
+        .command(&["install", "--tool", "uv", "mevanlc/tool"])
         .env("DTR_TEST_GH_TOKEN_FAIL_ACCOUNT", "mevanlc")
         .output()
         .unwrap();
@@ -1119,7 +1471,8 @@ fn python_auto_switch_explain_is_exact_and_secret_free() {
     let output = harness.run(&[
         "-n",
         "install",
-        "--uv",
+        "--tool",
+        "uv",
         "mike-clark-8192/tool",
         "--",
         "--force",
@@ -1139,12 +1492,11 @@ command:  uv tool install git+https://github.com/mike-clark-8192/tool.git --forc
 
 #[test]
 fn unmatched_python_owners_do_not_auto_switch() {
-    for backend in ["--uv", "--pipx"] {
-        let program = backend.trim_start_matches("--");
-        let harness = Harness::new(&[program]);
-        let output = harness.run(&["install", backend, "cli/cli"]);
+    for backend in ["uv", "pipx"] {
+        let harness = Harness::new(&[backend]);
+        let output = harness.run(&["install", "--tool", backend, "cli/cli"]);
         assert!(output.status.success(), "{}", stderr(&output));
-        let invocation = harness.invocation(program);
+        let invocation = harness.invocation(backend);
         assert!(!invocation.uv_no_github_fast_path);
         assert!(!invocation.git_auth_header_present);
     }
@@ -1155,7 +1507,8 @@ fn npm_local_install_maps_to_global_source_and_preserves_native_options() {
     let harness = Harness::new(&["npm"]);
     let output = harness.run(&[
         "install",
-        "--npm",
+        "--tool",
+        "npm",
         "./local repo",
         "--",
         "--prefix=/opt/npm tools",
@@ -1207,7 +1560,7 @@ fn npm_remote_repositories_map_to_vcs_package_sources() {
 
     for (repospec, source) in cases {
         let harness = Harness::new(&["npm"]);
-        let output = harness.run(&["install", "--npm", repospec]);
+        let output = harness.run(&["install", "--tool", "npm", repospec]);
         assert!(output.status.success(), "{}", stderr(&output));
         assert_eq!(
             harness.invocation("npm").args,
@@ -1219,7 +1572,7 @@ fn npm_remote_repositories_map_to_vcs_package_sources() {
 #[test]
 fn bare_npm_repo_uses_the_active_github_owner() {
     let harness = Harness::new(&["npm", "gh"]);
-    let output = harness.run(&["install", "--npm", "my-tool"]);
+    let output = harness.run(&["install", "--tool", "npm", "my-tool"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         harness.invocation("npm").args,
@@ -1247,33 +1600,40 @@ fn npm_native_arguments_cannot_add_a_source_or_disable_global_mode() {
         "--no-global=true",
     ] {
         let harness = Harness::new(&["npm"]);
-        let output = harness.run(&["install", "--npm", "owner/tool", "--", argument]);
+        let output = harness.run(&["install", "--tool", "npm", "owner/tool", "--", argument]);
         assert_eq!(output.status.code(), Some(2), "{argument}");
         assert!(!harness.was_invoked("npm"));
     }
 
     let valid = Harness::new(&["npm"]);
-    let output = valid.run(&["install", "--npm", "owner/tool", "--", "--global-style"]);
+    let output = valid.run(&[
+        "install",
+        "--tool",
+        "npm",
+        "owner/tool",
+        "--",
+        "--global-style",
+    ]);
     assert!(output.status.success(), "{}", stderr(&output));
 }
 
 #[test]
 fn npm_rejects_go_options_and_propagates_failures() {
     let harness = Harness::new(&["npm"]);
-    let rejected = harness.run(&["install", "--npm", "--no-latest", "owner/tool"]);
+    let rejected = harness.run(&["install", "--tool", "npm", "--no-latest", "owner/tool"]);
     assert_eq!(rejected.status.code(), Some(2));
     assert!(stderr(&rejected).contains("only to the Go installer"));
     assert!(!harness.was_invoked("npm"));
 
     let failed = harness
-        .command(&["install", "--npm", "owner/tool"])
+        .command(&["install", "--tool", "npm", "owner/tool"])
         .env("DTR_TEST_EXIT", "23")
         .output()
         .unwrap();
     assert_eq!(failed.status.code(), Some(23));
 
     let missing = Harness::new(&[]);
-    let output = missing.run(&["install", "--npm", "owner/tool"]);
+    let output = missing.run(&["install", "--tool", "npm", "owner/tool"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr(&output).contains("npm is required"));
 }
@@ -1294,7 +1654,7 @@ fn npm_install_auto_switches_with_git_http_auth_only() {
     );
 
     let output = harness
-        .command(&["install", "--npm", "mike-clark-8192/tool"])
+        .command(&["install", "--tool", "npm", "mike-clark-8192/tool"])
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "test.existing")
         .env("GIT_CONFIG_VALUE_0", "preserved")
@@ -1329,7 +1689,7 @@ fn npm_auto_switch_fails_closed_before_npm() {
             .success()
     );
     let output = harness
-        .command(&["install", "--npm", "mevanlc/tool"])
+        .command(&["install", "--tool", "npm", "mevanlc/tool"])
         .env("DTR_TEST_GH_TOKEN_FAIL_ACCOUNT", "mevanlc")
         .output()
         .unwrap();
@@ -1355,7 +1715,8 @@ fn npm_auto_switch_explain_is_exact_and_secret_free() {
     let output = harness.run(&[
         "-n",
         "install",
-        "--npm",
+        "--tool",
+        "npm",
         "mike-clark-8192/tool",
         "--",
         "--force",
@@ -1377,7 +1738,7 @@ command:  npm install --global --force -- git+https://github.com/mike-clark-8192
 #[test]
 fn unmatched_npm_owner_does_not_auto_switch() {
     let harness = Harness::new(&["npm"]);
-    let output = harness.run(&["install", "--npm", "cli/cli"]);
+    let output = harness.run(&["install", "--tool", "npm", "cli/cli"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let npm = harness.invocation("npm");
     assert!(!npm.git_auth_header_present);
@@ -1385,20 +1746,28 @@ fn unmatched_npm_owner_does_not_auto_switch() {
 }
 
 #[test]
-fn install_help_lists_every_first_mvp_backend() {
+fn install_help_lists_the_tool_option_and_values() {
     let harness = Harness::new(&[]);
     let output = harness.run(&["install", "--help"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let help = stdout(&output);
-    for selector in ["--go", "--rust", "--cargo", "--uv", "--pipx", "--npm"] {
-        assert!(help.contains(selector), "missing {selector} from:\n{help}");
-    }
+    assert!(help.contains("-t, --tool <TOOL>"), "{help}");
+    assert!(
+        help.contains("[possible values: go, cargo, uv, pipx, npm, auto]"),
+        "{help}"
+    );
+    assert!(help.contains("rust is an alias for cargo"), "{help}");
 }
 
 #[test]
 fn go_remote_install_adds_latest_by_default() {
     let harness = Harness::new(&["go"]);
-    let output = harness.run(&["install", "--go", "https://github.com/hjr265/gittop"]);
+    let output = harness.run(&[
+        "install",
+        "--tool",
+        "go",
+        "https://github.com/hjr265/gittop",
+    ]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         harness.invocation("go").args,
@@ -1409,7 +1778,13 @@ fn go_remote_install_adds_latest_by_default() {
 #[test]
 fn go_remote_install_honors_no_latest_and_i_alias() {
     let harness = Harness::new(&["go"]);
-    let output = harness.run(&["i", "--go", "--no-latest", "git@example.com:owner/tool.git"]);
+    let output = harness.run(&[
+        "i",
+        "--tool",
+        "go",
+        "--no-latest",
+        "git@example.com:owner/tool.git",
+    ]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         harness.invocation("go").args,
@@ -1420,7 +1795,7 @@ fn go_remote_install_honors_no_latest_and_i_alias() {
 #[test]
 fn bare_go_repo_uses_authenticated_github_owner() {
     let harness = Harness::new(&["go", "gh"]);
-    let output = harness.run(&["install", "--go", "my-tool"]);
+    let output = harness.run(&["install", "--tool", "go", "my-tool"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         harness.invocation("go").args,
@@ -1433,7 +1808,7 @@ fn local_go_repo_installs_all_commands_from_that_directory() {
     let harness = Harness::new(&["go"]);
     let repo = harness.work.join("local repo");
     fs::create_dir(&repo).unwrap();
-    let output = harness.run(&["install", "--go", "./local repo"]);
+    let output = harness.run(&["install", "--tool", "go", "./local repo"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let invocation = harness.invocation("go");
     assert_eq!(
@@ -1446,7 +1821,7 @@ fn local_go_repo_installs_all_commands_from_that_directory() {
 #[test]
 fn no_latest_is_rejected_for_local_repo() {
     let harness = Harness::new(&["go"]);
-    let output = harness.run(&["install", "--go", "--no-latest", "./repo"]);
+    let output = harness.run(&["install", "--tool", "go", "--no-latest", "./repo"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr(&output).contains("--no-latest applies only to remote"));
     assert!(!harness.was_invoked("go"));
@@ -1466,7 +1841,7 @@ fn child_exit_status_is_propagated() {
 #[test]
 fn missing_required_tool_gets_a_focused_error() {
     let harness = Harness::new(&[]);
-    let output = harness.run(&["install", "--go", "owner/repo"]);
+    let output = harness.run(&["install", "--tool", "go", "owner/repo"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr(&output).contains("go is required"));
 }

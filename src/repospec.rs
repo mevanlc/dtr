@@ -321,6 +321,26 @@ impl RepoSpec {
         }
     }
 
+    pub(crate) fn inspection_git_remote(
+        &self,
+        github_owner: Option<&str>,
+    ) -> Result<OsString, DtrError> {
+        match self {
+            Self::Local { .. } => Err(DtrError::new(
+                "local repositories are inspected directly, not through Git",
+            )),
+            Self::Forge { .. } => self.install_git_remote(github_owner),
+            Self::GitUrl { .. } => self.git_remote(),
+            Self::ScpLike { remote, .. } => Ok(remote.clone()),
+            Self::GithubMine { repo } => {
+                let owner = github_owner.ok_or_else(|| {
+                    DtrError::new("the authenticated GitHub owner has not been resolved")
+                })?;
+                Ok(format!("https://github.com/{owner}/{repo}.git").into())
+            }
+        }
+    }
+
     pub(crate) fn python_package_source(
         &self,
         github_owner: Option<&str>,
@@ -637,6 +657,28 @@ mod tests {
                 .unwrap()
                 .to_str(),
             Some("ssh://git@example.com/srv/git/tool.git")
+        );
+    }
+
+    #[test]
+    fn inspection_remote_normalizes_forges_but_preserves_generic_git_syntax() {
+        assert_eq!(
+            parse("http://github.com/owner/tool")
+                .inspection_git_remote(None)
+                .unwrap(),
+            OsString::from("https://github.com/owner/tool.git")
+        );
+        assert_eq!(
+            parse("git@example.com:owner/tool.git")
+                .inspection_git_remote(None)
+                .unwrap(),
+            OsString::from("git@example.com:owner/tool.git")
+        );
+        assert_eq!(
+            parse("tool")
+                .inspection_git_remote(Some("mevanlc"))
+                .unwrap(),
+            OsString::from("https://github.com/mevanlc/tool.git")
         );
     }
 

@@ -4,6 +4,7 @@ mod command;
 mod config;
 mod error;
 mod github_auth;
+mod install_detect;
 mod repospec;
 mod resolve;
 

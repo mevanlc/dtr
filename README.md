@@ -17,22 +17,22 @@ backend:  gh
 target:   hjr265--gittop
 command:  gh repo clone hjr265/gittop hjr265--gittop -- --depth 1
 
-$ dtr --explain install --go https://github.com/hjr265/gittop
+$ dtr --explain install https://github.com/hjr265/gittop
 repospec: GitHub repository hjr265/gittop
 backend:  go
 command:  go install github.com/hjr265/gittop@latest
 
-$ dtr --explain install --rust hjr265/gittop -- --locked
+$ dtr --explain install --tool cargo hjr265/gittop -- --locked
 repospec: GitHub repository hjr265/gittop
 backend:  cargo
 command:  cargo install --git https://github.com/hjr265/gittop.git --locked
 
-$ dtr --explain install --uv astral-sh/ruff -- --force
+$ dtr --explain install --tool uv astral-sh/ruff -- --force
 repospec: GitHub repository astral-sh/ruff
 backend:  uv
 command:  uv tool install git+https://github.com/astral-sh/ruff.git --force
 
-$ dtr --explain install --npm owner/tool -- --force
+$ dtr --explain install --tool npm owner/tool -- --force
 repospec: GitHub repository owner/tool
 backend:  npm
 command:  npm install --global --force -- git+https://github.com/owner/tool.git
@@ -56,18 +56,20 @@ cargo install --path .
 
 Cloning requires Git. Depending on the operation, dtr also uses:
 
-- [`gh`](https://cli.github.com/) for GitHub-aware cloning and resolving the
-  owner of a bare repository name.
-- [`glab`](https://docs.gitlab.com/cli/) for GitLab-aware cloning.
-- Cargo for `dtr install --rust` or its `--cargo` alias.
-- Go for `dtr install --go`.
-- uv for `dtr install --uv`.
-- pipx for `dtr install --pipx`.
-- npm for `dtr install --npm`.
+- [`gh`](https://cli.github.com/) for GitHub-aware cloning, resolving the owner
+  of a bare repository name, and preferred GitHub root inspection in auto mode.
+- [`glab`](https://docs.gitlab.com/cli/) for GitLab-aware cloning and preferred
+  GitLab root inspection in auto mode.
+- Cargo for `dtr install --tool cargo` (`rust` is a tool-value alias).
+- Go for `dtr install --tool go`.
+- uv for `dtr install --tool uv`.
+- pipx for `dtr install --tool pipx`.
+- npm for `dtr install --tool npm`.
 
 When a forge CLI is unavailable, an owner-qualified GitHub or URL-qualified
 GitLab repository falls back to `git clone`. A bare repository name requires
 authenticated `gh` state because its owner is otherwise unknowable.
+Remote auto detection also uses Git for its filtered inspection fallback.
 
 ## Clone
 
@@ -136,11 +138,13 @@ process-scoped authentication only to the clone or remote-install child. It does
 not run `gh auth switch` or change the active GitHub CLI account. The operation
 uses HTTPS because selecting a token does not select an SSH key.
 
-GitHub-aware clones receive the token through `GH_TOKEN`. Rust, Python, and npm
+GitHub-aware clones receive the token through `GH_TOKEN`. Cargo, Python, and npm
 remote installs use the Git CLI and process-scoped Git configuration containing
 a URL-specific authorization header. Dtr extends any existing process-scoped
 Git configuration and removes inherited `GH_TOKEN` and `GITHUB_TOKEN` from
-installer children. No mode writes the token to disk or includes it in command
+installer children. Auto-mode root inspection reuses the same selected token
+through process-scoped `GH_TOKEN` for the GitHub API or the same Git header for
+its fallback. No mode writes the token to disk or includes it in command
 arguments, explain output, or errors.
 
 An unmatched owner and a bare repository name retain normal active-account
@@ -166,28 +170,67 @@ checkout is not persistently bound to that identity for later `git fetch` or
 ## Install from a repository
 
 ```text
-dtr [--explain|-n] install|i --go [--no-latest] <dtr-repospec>
-dtr [--explain|-n] install|i <--rust|--cargo> <dtr-repospec> [-- <cargo-install-arg>...]
-dtr [--explain|-n] install|i --uv <dtr-repospec> [-- <uv-tool-install-arg>...]
-dtr [--explain|-n] install|i --pipx <dtr-repospec> [-- <pipx-install-option>...]
-dtr [--explain|-n] install|i --npm <dtr-repospec> [-- <npm-install-option>...]
+dtr [--explain|-n] install|i [-t|--tool <tool>] [--no-latest] <dtr-repospec> [-- <install-arg>...]
 ```
 
 `install` is deliberately repo-oriented. Dtr does not wrap the package-registry
 surface that `cargo install`, `go install`, `uv tool install`, `pipx install`,
 and `npm install -g` already provide well.
 
-Rust repositories map to Cargo's native source modes:
+`--tool` accepts `go`, `cargo`, `uv`, `pipx`, `npm`, and `auto`. `rust` is an
+alias for the preferred Cargo spelling. The default is `auto`, so these are
+equivalent:
 
 ```sh
-dtr install --rust ./my-tool
+dtr install owner/tool
+dtr install --tool auto owner/tool
+```
+
+### Automatic tool selection
+
+Auto selection lists the repository root and recognizes these exact file names:
+
+| Root manifest | Candidate |
+|---|---|
+| `go.mod` | Go |
+| `Cargo.toml` | Cargo |
+| `pyproject.toml`, `setup.py`, or `setup.cfg` | Python |
+| `package.json` | npm |
+
+Manifest-like directories, case variants, lockfiles, tool configuration, and
+nested manifests are not signals. Multiple Python manifests still identify one
+ecosystem. If more than one ecosystem is present, or none is present, dtr
+declines to run and lists the explicit `--tool` values instead of guessing.
+For an unambiguous Python repository, auto prefers uv when it is on `PATH`, then
+falls back to pipx; it fails if neither is available.
+
+Local repositories are listed directly. Recognized GitHub and GitLab repositories
+prefer their forge CLI's root-tree API when `gh` or `glab` is available. Other
+remotes, API failures, and truncated API results fall back to a temporary
+depth-one, single-branch Git clone with no tags, no checkout, and a
+`blob:none` filter. Dtr reads the root tree and removes the temporary repository;
+it does not deliberately fall back to a working checkout or full history.
+Inspection always uses the remote default branch. A generic SSH or SCP-like
+repospec remains generic even when its hostname is a well-known forge.
+
+Explicit `--tool` selection skips repository inspection entirely. This is the
+escape hatch for mixed-language repositories, nested packages, inaccessible
+inspection APIs, and intentional backend overrides. Auto detection identifies
+the ecosystem only; the selected native installer still decides whether the
+repository actually provides an installable command.
+
+### Backend mappings
+
+Cargo repositories map to Cargo's native source modes:
+
+```sh
+dtr install --tool cargo ./my-tool
 # cargo install --path ./my-tool
 
-dtr install --cargo hjr265/gittop -- --locked --features color
+dtr install --tool rust hjr265/gittop -- --locked --features color
 # cargo install --git https://github.com/hjr265/gittop.git --locked --features color
 ```
 
-`--rust` is the primary ecosystem spelling; `--cargo` is a visible alias.
 Native Cargo package and install options follow `--` and are forwarded exactly.
 Dtr rejects Cargo's `--git`, `--path`, `--registry`, and `--index` source options
 there because the repospec already selects the source. SCP-like Git remotes are
@@ -197,10 +240,10 @@ staging remain parked.
 Python repositories map to local package paths or `git+<URL>` VCS requirements:
 
 ```sh
-dtr install --uv ./my-tool -- --force
+dtr install --tool uv ./my-tool -- --force
 # uv tool install ./my-tool --force
 
-dtr install --pipx owner/my-tool -- --python=3.14 --force
+dtr install --tool pipx owner/my-tool -- --python=3.14 --force
 # pipx install --python=3.14 --force -- git+https://github.com/owner/my-tool.git
 ```
 
@@ -214,10 +257,10 @@ npm repositories map to local paths or npm Git package sources, then install
 globally:
 
 ```sh
-dtr install --npm ./my-tool -- --prefix=/opt/npm
+dtr install --tool npm ./my-tool -- --prefix=/opt/npm
 # npm install --global --prefix=/opt/npm -- ./my-tool
 
-dtr install --npm owner/my-tool -- --force
+dtr install --tool npm owner/my-tool -- --force
 # npm install --global --force -- git+https://github.com/owner/my-tool.git
 ```
 
@@ -233,17 +276,17 @@ unprefixed because npm rejects `git+git://`.
 Remote Go repository installs receive `@latest` by default:
 
 ```sh
-dtr install --go https://github.com/hjr265/gittop
+dtr install --tool go https://github.com/hjr265/gittop
 # go install github.com/hjr265/gittop@latest
 
-dtr i --go --no-latest hjr265/gittop
+dtr i --tool go --no-latest hjr265/gittop
 # go install github.com/hjr265/gittop
 ```
 
 A bare name uses the current GitHub user:
 
 ```sh
-dtr install --go my-tool
+dtr install --tool go my-tool
 # gh supplies <current-owner>, then:
 # go install github.com/<current-owner>/my-tool@latest
 ```
@@ -251,7 +294,7 @@ dtr install --go my-tool
 A local repository installs all of its Go commands from that directory:
 
 ```sh
-dtr install --go ./my-tool
+dtr install --tool go ./my-tool
 # logically: (cd ./my-tool && go install ./...)
 ```
 
@@ -265,10 +308,10 @@ without performing it:
 
 ```sh
 dtr -n clone -D owner/repo
-dtr --explain install --go owner/repo
-dtr --explain install --rust owner/repo -- --locked
-dtr --explain install --uv owner/repo -- --force
-dtr --explain install --npm owner/repo -- --force
+dtr --explain install owner/repo
+dtr --explain install --tool cargo owner/repo -- --locked
+dtr --explain install --tool uv owner/repo -- --force
+dtr --explain install --tool npm owner/repo -- --force
 ```
 
 The position is intentional. Git already uses `clone -n` for `--no-checkout`,
@@ -280,8 +323,9 @@ dtr clone -n owner/repo  # clone without checkout
 ```
 
 Explain mode uses the same typed command plan as execution. It may perform
-read-only discovery, such as resolving the current user with `gh`, but it never
-starts the resolved clone/install operation or creates planned directories.
+read-only discovery, such as resolving the current user, querying a forge API,
+or creating and removing an inspection-only temporary Git clone. It never starts
+the resolved clone/install operation or creates its planned target directories.
 
 ## Current boundaries
 
@@ -304,10 +348,8 @@ acceptance criteria live in [devdocs/PLAN-MVP00.md](devdocs/PLAN-MVP00.md),
 ## Development
 
 ```sh
-cargo fmt --check
-cargo clippy --all-targets --all-features --locked -- -D warnings
-cargo nextest run --locked
-cargo check --locked
-actionlint .github/workflows/ci.yml
-git diff --check
+just check
 ```
+
+This runs formatting, Clippy, the nextest suite, `cargo check`, `actionlint`,
+and `git diff --check`.

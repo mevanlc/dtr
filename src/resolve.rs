@@ -2,11 +2,13 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::cli::InstallArgs;
+use crate::cli::{InstallArgs, InstallTool};
 use crate::clone_args::{CloneRequest, NameMode};
 use crate::command::{CommandPlan, SecretEnvironment, command_exists};
 use crate::error::DtrError;
 use crate::github_auth;
+use crate::github_auth::GithubAuthSelection;
+use crate::install_detect;
 use crate::repospec::{Forge, RepoSpec};
 
 pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError> {
@@ -113,27 +115,92 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
 }
 
 pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
-    if args.go {
-        plan_go_install(args)
-    } else if args.rust {
-        plan_cargo_install(args)
-    } else if args.uv {
-        plan_python_install(args, PythonBackend::Uv)
-    } else if args.pipx {
-        plan_python_install(args, PythonBackend::Pipx)
+    let requested_tool = args.tool;
+    let spec = RepoSpec::parse(&args.repospec)?;
+    let github_owner = if matches!(spec, RepoSpec::GithubMine { .. }) {
+        Some(resolve_github_owner()?)
     } else {
-        plan_npm_install(args)
+        None
+    };
+    let github_selection = if requested_tool == InstallTool::Auto {
+        GithubSelection::Resolved(select_github_auth(&spec)?)
+    } else {
+        GithubSelection::Unresolved
+    };
+    let selected_tool = if requested_tool == InstallTool::Auto {
+        install_detect::detect_tool(&spec, github_owner.as_deref(), github_selection.selection())?
+    } else {
+        requested_tool
+    };
+    let context = InstallContext {
+        args,
+        spec,
+        github_owner,
+        github_selection,
+    };
+
+    match selected_tool {
+        InstallTool::Go => plan_go_install(context),
+        InstallTool::Cargo => plan_cargo_install(context),
+        InstallTool::Uv => plan_python_install(context, PythonBackend::Uv),
+        InstallTool::Pipx => plan_python_install(context, PythonBackend::Pipx),
+        InstallTool::Npm => plan_npm_install(context),
+        InstallTool::Auto => unreachable!("auto tool was resolved before backend planning"),
     }
 }
 
-fn plan_go_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
+struct InstallContext {
+    args: InstallArgs,
+    spec: RepoSpec,
+    github_owner: Option<String>,
+    github_selection: GithubSelection,
+}
+
+enum GithubSelection {
+    Unresolved,
+    Resolved(Option<GithubAuthSelection>),
+}
+
+impl GithubSelection {
+    fn selection(&self) -> Option<&GithubAuthSelection> {
+        match self {
+            Self::Unresolved | Self::Resolved(None) => None,
+            Self::Resolved(Some(selection)) => Some(selection),
+        }
+    }
+
+    fn resolve(self, spec: &RepoSpec) -> Result<Option<GithubAuthSelection>, DtrError> {
+        match self {
+            Self::Unresolved => select_github_auth(spec),
+            Self::Resolved(selection) => Ok(selection),
+        }
+    }
+}
+
+fn select_github_auth(spec: &RepoSpec) -> Result<Option<GithubAuthSelection>, DtrError> {
+    match spec {
+        RepoSpec::Forge {
+            forge: Forge::GitHub,
+            namespace,
+            ..
+        } => github_auth::select_for_owner(&namespace[0]),
+        _ => Ok(None),
+    }
+}
+
+fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
+    let InstallContext {
+        args,
+        spec,
+        github_owner,
+        ..
+    } = context;
     if !args.install_args.is_empty() {
         return Err(DtrError::new(
-            "arguments after -- are supported only by the Rust/Cargo, uv, pipx, and npm installers",
+            "arguments after -- are supported only by the Cargo, uv, pipx, and npm installers",
         ));
     }
     require_command("go", "installing a Go command")?;
-    let spec = RepoSpec::parse(&args.repospec)?;
     let repospec = spec.description();
 
     if spec.is_local() {
@@ -160,12 +227,7 @@ fn plan_go_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
         });
     }
 
-    let owner = if matches!(spec, RepoSpec::GithubMine { .. }) {
-        Some(resolve_github_owner()?)
-    } else {
-        None
-    };
-    let mut import_path = spec.go_import_path(owner.as_deref())?;
+    let mut import_path = spec.go_import_path(github_owner.as_deref())?;
     if !args.no_latest {
         import_path.push_str("@latest");
     }
@@ -184,7 +246,13 @@ fn plan_go_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
     })
 }
 
-fn plan_cargo_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
+fn plan_cargo_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
+    let InstallContext {
+        args,
+        spec,
+        github_owner,
+        github_selection,
+    } = context;
     if args.no_latest {
         return Err(DtrError::new(
             "--no-latest applies only to the Go installer",
@@ -193,7 +261,6 @@ fn plan_cargo_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
     reject_cargo_source_arguments(&args.install_args)?;
     require_command("cargo", "installing a Rust binary")?;
 
-    let spec = RepoSpec::parse(&args.repospec)?;
     let repospec = spec.description();
     let mut command_args = vec![OsString::from("install")];
     let mut auth = None;
@@ -204,22 +271,11 @@ fn plan_cargo_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
         command_args.push("--path".into());
         command_args.push(path.as_os_str().to_os_string());
     } else {
-        let owner = if matches!(spec, RepoSpec::GithubMine { .. }) {
-            Some(resolve_github_owner()?)
-        } else {
-            None
-        };
-        let remote = spec.install_git_remote(owner.as_deref())?;
+        let remote = spec.install_git_remote(github_owner.as_deref())?;
         command_args.push("--git".into());
         command_args.push(remote);
 
-        if let RepoSpec::Forge {
-            forge: Forge::GitHub,
-            namespace,
-            ..
-        } = &spec
-            && let Some(selection) = github_auth::select_for_owner(&namespace[0])?
-        {
+        if let Some(selection) = github_selection.resolve(&spec)? {
             auth = Some(format!(
                 "auto-switch to {} (process-scoped; active gh account unchanged)",
                 selection.account
@@ -266,7 +322,16 @@ impl PythonBackend {
     }
 }
 
-fn plan_python_install(args: InstallArgs, backend: PythonBackend) -> Result<CommandPlan, DtrError> {
+fn plan_python_install(
+    context: InstallContext,
+    backend: PythonBackend,
+) -> Result<CommandPlan, DtrError> {
+    let InstallContext {
+        args,
+        spec,
+        github_owner,
+        github_selection,
+    } = context;
     if args.no_latest {
         return Err(DtrError::new(
             "--no-latest applies only to the Go installer",
@@ -277,25 +342,13 @@ fn plan_python_install(args: InstallArgs, backend: PythonBackend) -> Result<Comm
     }
     require_command(backend.program(), backend.purpose())?;
 
-    let spec = RepoSpec::parse(&args.repospec)?;
     let repospec = spec.description();
-    let owner = if matches!(spec, RepoSpec::GithubMine { .. }) {
-        Some(resolve_github_owner()?)
-    } else {
-        None
-    };
-    let source = spec.python_package_source(owner.as_deref())?;
+    let source = spec.python_package_source(github_owner.as_deref())?;
     let mut auth = None;
     let mut environment = Vec::new();
     let mut removed_environment = Vec::new();
 
-    if let RepoSpec::Forge {
-        forge: Forge::GitHub,
-        namespace,
-        ..
-    } = &spec
-        && let Some(selection) = github_auth::select_for_owner(&namespace[0])?
-    {
+    if let Some(selection) = github_selection.resolve(&spec)? {
         auth = Some(format!(
             "auto-switch to {} (process-scoped; active gh account unchanged)",
             selection.account
@@ -331,7 +384,13 @@ fn plan_python_install(args: InstallArgs, backend: PythonBackend) -> Result<Comm
     })
 }
 
-fn plan_npm_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
+fn plan_npm_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
+    let InstallContext {
+        args,
+        spec,
+        github_owner,
+        github_selection,
+    } = context;
     if args.no_latest {
         return Err(DtrError::new(
             "--no-latest applies only to the Go installer",
@@ -340,25 +399,13 @@ fn plan_npm_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
     validate_npm_arguments(&args.install_args)?;
     require_command("npm", "installing a JavaScript tool with npm")?;
 
-    let spec = RepoSpec::parse(&args.repospec)?;
     let repospec = spec.description();
-    let owner = if matches!(spec, RepoSpec::GithubMine { .. }) {
-        Some(resolve_github_owner()?)
-    } else {
-        None
-    };
-    let source = spec.npm_package_source(owner.as_deref())?;
+    let source = spec.npm_package_source(github_owner.as_deref())?;
     let mut auth = None;
     let mut environment = Vec::new();
     let mut removed_environment = Vec::new();
 
-    if let RepoSpec::Forge {
-        forge: Forge::GitHub,
-        namespace,
-        ..
-    } = &spec
-        && let Some(selection) = github_auth::select_for_owner(&namespace[0])?
-    {
+    if let Some(selection) = github_selection.resolve(&spec)? {
         auth = Some(format!(
             "auto-switch to {} (process-scoped; active gh account unchanged)",
             selection.account

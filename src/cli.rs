@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use clap::{ArgGroup, Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -41,32 +41,10 @@ pub(crate) struct CloneArgs {
 }
 
 #[derive(Debug, Args)]
-#[command(group(
-    ArgGroup::new("installer")
-        .required(true)
-        .multiple(false)
-        .args(["go", "rust", "uv", "pipx", "npm"])
-))]
 pub(crate) struct InstallArgs {
-    /// Install a Go command from the repository
-    #[arg(long)]
-    pub(crate) go: bool,
-
-    /// Install a Rust binary from the repository
-    #[arg(long, visible_alias = "cargo")]
-    pub(crate) rust: bool,
-
-    /// Install a Python tool with uv
-    #[arg(long)]
-    pub(crate) uv: bool,
-
-    /// Install a Python tool with pipx
-    #[arg(long)]
-    pub(crate) pipx: bool,
-
-    /// Install a JavaScript tool with npm
-    #[arg(long)]
-    pub(crate) npm: bool,
+    /// Installer to use; rust is an alias for cargo
+    #[arg(short = 't', long, default_value_t = InstallTool::Auto)]
+    pub(crate) tool: InstallTool,
 
     /// Do not add @latest to a remote Go import path
     #[arg(long)]
@@ -79,6 +57,30 @@ pub(crate) struct InstallArgs {
     /// Native installer arguments, following --
     #[arg(last = true, value_name = "INSTALL_ARG", num_args = 0..)]
     pub(crate) install_args: Vec<OsString>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub(crate) enum InstallTool {
+    Go,
+    #[value(alias("rust"))]
+    Cargo,
+    Uv,
+    Pipx,
+    Npm,
+    Auto,
+}
+
+impl std::fmt::Display for InstallTool {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Go => "go",
+            Self::Cargo => "cargo",
+            Self::Uv => "uv",
+            Self::Pipx => "pipx",
+            Self::Npm => "npm",
+            Self::Auto => "auto",
+        })
+    }
 }
 
 #[derive(Debug, Args)]
@@ -145,79 +147,107 @@ mod tests {
 
     #[test]
     fn install_alias_is_accepted() {
-        let cli = Cli::try_parse_from(["dtr", "i", "--go", "owner/repo"]).expect("valid command");
+        let cli =
+            Cli::try_parse_from(["dtr", "i", "--tool", "go", "owner/repo"]).expect("valid command");
         assert!(matches!(cli.command, DtrCommand::Install(_)));
     }
 
     #[test]
-    fn rust_and_cargo_select_the_same_installer() {
-        for selector in ["--rust", "--cargo"] {
-            let cli = Cli::try_parse_from(["dtr", "install", selector, "owner/repo"])
-                .expect("valid Rust install command");
+    fn cargo_and_rust_value_alias_select_the_same_installer() {
+        for value in ["cargo", "rust"] {
+            let cli = Cli::try_parse_from(["dtr", "install", "--tool", value, "owner/repo"])
+                .expect("valid Cargo install command");
             let DtrCommand::Install(args) = cli.command else {
                 panic!("expected install command");
             };
-            assert!(args.rust);
-            assert!(!args.go);
-            assert!(!args.uv);
-            assert!(!args.pipx);
-            assert!(!args.npm);
+            assert_eq!(args.tool, InstallTool::Cargo);
         }
     }
 
     #[test]
     fn python_installers_are_selectable() {
-        for selector in ["--uv", "--pipx"] {
-            let cli = Cli::try_parse_from(["dtr", "install", selector, "owner/repo"])
+        for value in ["uv", "pipx"] {
+            let cli = Cli::try_parse_from(["dtr", "install", "-t", value, "owner/repo"])
                 .expect("valid Python install command");
             let DtrCommand::Install(args) = cli.command else {
                 panic!("expected install command");
             };
-            assert_eq!(args.uv, selector == "--uv");
-            assert_eq!(args.pipx, selector == "--pipx");
-            assert!(!args.npm);
+            assert_eq!(
+                args.tool,
+                if value == "uv" {
+                    InstallTool::Uv
+                } else {
+                    InstallTool::Pipx
+                }
+            );
         }
     }
 
     #[test]
-    fn npm_installer_is_selectable() {
-        let cli = Cli::try_parse_from(["dtr", "install", "--npm", "owner/repo"])
+    fn auto_is_the_default_and_npm_is_selectable() {
+        let cli = Cli::try_parse_from(["dtr", "install", "owner/repo"])
+            .expect("valid automatic install command");
+        let DtrCommand::Install(args) = cli.command else {
+            panic!("expected install command");
+        };
+        assert_eq!(args.tool, InstallTool::Auto);
+
+        let cli = Cli::try_parse_from(["dtr", "install", "--tool=npm", "owner/repo"])
             .expect("valid npm install command");
         let DtrCommand::Install(args) = cli.command else {
             panic!("expected install command");
         };
-        assert!(args.npm);
-        assert!(!args.go);
-        assert!(!args.rust);
-        assert!(!args.uv);
-        assert!(!args.pipx);
+        assert_eq!(args.tool, InstallTool::Npm);
     }
 
     #[test]
-    fn installer_is_required_and_selectors_conflict() {
-        assert!(Cli::try_parse_from(["dtr", "install", "owner/repo"]).is_err());
-        assert!(Cli::try_parse_from(["dtr", "install", "--go", "--rust", "owner/repo",]).is_err());
-        assert!(Cli::try_parse_from(["dtr", "install", "--uv", "--pipx", "owner/repo",]).is_err());
-        assert!(Cli::try_parse_from(["dtr", "install", "--npm", "--go", "owner/repo",]).is_err());
+    fn legacy_selectors_are_rejected_and_tool_cannot_repeat() {
+        for selector in ["--go", "--rust", "--cargo", "--uv", "--pipx", "--npm"] {
+            assert!(
+                Cli::try_parse_from(["dtr", "install", selector, "owner/repo"]).is_err(),
+                "{selector}"
+            );
+        }
+        assert!(
+            Cli::try_parse_from([
+                "dtr",
+                "install",
+                "--tool",
+                "go",
+                "--tool",
+                "cargo",
+                "owner/repo",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
     fn cargo_arguments_require_and_follow_the_separator() {
         assert!(
-            Cli::try_parse_from(["dtr", "install", "--rust", "owner/repo", "--locked",]).is_err()
+            Cli::try_parse_from([
+                "dtr",
+                "install",
+                "--tool",
+                "cargo",
+                "owner/repo",
+                "--locked",
+            ])
+            .is_err()
         );
 
         let cli = Cli::try_parse_from([
             "dtr",
             "install",
-            "--rust",
+            "--tool",
+            "cargo",
             "owner/repo",
             "--",
             "--locked",
             "--bin",
             "tool",
         ])
-        .expect("valid Rust install command");
+        .expect("valid Cargo install command");
         let DtrCommand::Install(args) = cli.command else {
             panic!("expected install command");
         };
@@ -236,7 +266,8 @@ mod tests {
         let cli = Cli::try_parse_from([
             OsString::from("dtr"),
             OsString::from("install"),
-            OsString::from("--uv"),
+            OsString::from("--tool"),
+            OsString::from("uv"),
             OsString::from("owner/repo"),
             OsString::from("--"),
             native_argument.clone(),
