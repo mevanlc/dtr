@@ -29,6 +29,6 @@ jobs:
           fallback: none
 
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo nextest run
-      - run: cargo check
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo nextest run --locked
+      - run: cargo check --locked

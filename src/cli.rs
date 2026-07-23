@@ -45,7 +45,7 @@ pub(crate) struct CloneArgs {
     ArgGroup::new("installer")
         .required(true)
         .multiple(false)
-        .args(["go", "rust", "uv", "pipx"])
+        .args(["go", "rust", "uv", "pipx", "npm"])
 ))]
 pub(crate) struct InstallArgs {
     /// Install a Go command from the repository
@@ -63,6 +63,10 @@ pub(crate) struct InstallArgs {
     /// Install a Python tool with pipx
     #[arg(long)]
     pub(crate) pipx: bool,
+
+    /// Install a JavaScript tool with npm
+    #[arg(long)]
+    pub(crate) npm: bool,
 
     /// Do not add @latest to a remote Go import path
     #[arg(long)]
@@ -157,6 +161,7 @@ mod tests {
             assert!(!args.go);
             assert!(!args.uv);
             assert!(!args.pipx);
+            assert!(!args.npm);
         }
     }
 
@@ -170,7 +175,22 @@ mod tests {
             };
             assert_eq!(args.uv, selector == "--uv");
             assert_eq!(args.pipx, selector == "--pipx");
+            assert!(!args.npm);
         }
+    }
+
+    #[test]
+    fn npm_installer_is_selectable() {
+        let cli = Cli::try_parse_from(["dtr", "install", "--npm", "owner/repo"])
+            .expect("valid npm install command");
+        let DtrCommand::Install(args) = cli.command else {
+            panic!("expected install command");
+        };
+        assert!(args.npm);
+        assert!(!args.go);
+        assert!(!args.rust);
+        assert!(!args.uv);
+        assert!(!args.pipx);
     }
 
     #[test]
@@ -178,6 +198,7 @@ mod tests {
         assert!(Cli::try_parse_from(["dtr", "install", "owner/repo"]).is_err());
         assert!(Cli::try_parse_from(["dtr", "install", "--go", "--rust", "owner/repo",]).is_err());
         assert!(Cli::try_parse_from(["dtr", "install", "--uv", "--pipx", "owner/repo",]).is_err());
+        assert!(Cli::try_parse_from(["dtr", "install", "--npm", "--go", "owner/repo",]).is_err());
     }
 
     #[test]

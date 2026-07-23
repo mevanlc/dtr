@@ -715,7 +715,7 @@ fn rust_rejects_no_latest_and_go_rejects_cargo_arguments() {
 
     let go = harness.run(&["install", "--go", "owner/tool", "--", "--locked"]);
     assert_eq!(go.status.code(), Some(2));
-    assert!(stderr(&go).contains("Rust/Cargo, uv, and pipx installers"));
+    assert!(stderr(&go).contains("Rust/Cargo, uv, pipx, and npm installers"));
     assert!(!harness.was_invoked("go"));
 }
 
@@ -941,6 +941,10 @@ fn python_remote_repositories_map_to_vcs_requirements() {
             "git+ssh://git@example.com/srv/tool.git",
         ),
         (
+            "git://example.com/owner/tool.git",
+            "git+git://example.com/owner/tool.git",
+        ),
+        (
             "git@example.com:owner/tool.git",
             "git+ssh://git@example.com/~/owner/tool.git",
         ),
@@ -1143,6 +1147,251 @@ fn unmatched_python_owners_do_not_auto_switch() {
         let invocation = harness.invocation(program);
         assert!(!invocation.uv_no_github_fast_path);
         assert!(!invocation.git_auth_header_present);
+    }
+}
+
+#[test]
+fn npm_local_install_maps_to_global_source_and_preserves_native_options() {
+    let harness = Harness::new(&["npm"]);
+    let output = harness.run(&[
+        "install",
+        "--npm",
+        "./local repo",
+        "--",
+        "--prefix=/opt/npm tools",
+        "--force",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("npm").args,
+        [
+            "install",
+            "--global",
+            "--prefix=/opt/npm tools",
+            "--force",
+            "--",
+            "./local repo",
+        ]
+    );
+}
+
+#[test]
+fn npm_remote_repositories_map_to_vcs_package_sources() {
+    let cases: &[(&str, &str)] = &[
+        ("owner/tool", "git+https://github.com/owner/tool.git"),
+        (
+            "http://gitlab.com/group/subgroup/tool",
+            "git+https://gitlab.com/group/subgroup/tool.git",
+        ),
+        (
+            "https://example.com/git/tool.git",
+            "git+https://example.com/git/tool.git",
+        ),
+        (
+            "ssh://git@example.com/srv/tool.git",
+            "git+ssh://git@example.com/srv/tool.git",
+        ),
+        (
+            "git://example.com/owner/tool.git",
+            "git://example.com/owner/tool.git",
+        ),
+        (
+            "git@example.com:owner/tool.git",
+            "git+ssh://git@example.com/~/owner/tool.git",
+        ),
+        (
+            "git@example.com:/srv/tool.git",
+            "git+ssh://git@example.com/srv/tool.git",
+        ),
+    ];
+
+    for (repospec, source) in cases {
+        let harness = Harness::new(&["npm"]);
+        let output = harness.run(&["install", "--npm", repospec]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(
+            harness.invocation("npm").args,
+            ["install", "--global", "--", source]
+        );
+    }
+}
+
+#[test]
+fn bare_npm_repo_uses_the_active_github_owner() {
+    let harness = Harness::new(&["npm", "gh"]);
+    let output = harness.run(&["install", "--npm", "my-tool"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("npm").args,
+        [
+            "install",
+            "--global",
+            "--",
+            "git+https://github.com/mevanlc/my-tool.git",
+        ]
+    );
+    assert!(!harness.was_invoked("gh-auth-token"));
+}
+
+#[test]
+fn npm_native_arguments_cannot_add_a_source_or_disable_global_mode() {
+    for argument in [
+        "another-package",
+        "/opt/npm",
+        "--",
+        "-g",
+        "-g=false",
+        "--global",
+        "--global=false",
+        "--no-global",
+        "--no-global=true",
+    ] {
+        let harness = Harness::new(&["npm"]);
+        let output = harness.run(&["install", "--npm", "owner/tool", "--", argument]);
+        assert_eq!(output.status.code(), Some(2), "{argument}");
+        assert!(!harness.was_invoked("npm"));
+    }
+
+    let valid = Harness::new(&["npm"]);
+    let output = valid.run(&["install", "--npm", "owner/tool", "--", "--global-style"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+#[test]
+fn npm_rejects_go_options_and_propagates_failures() {
+    let harness = Harness::new(&["npm"]);
+    let rejected = harness.run(&["install", "--npm", "--no-latest", "owner/tool"]);
+    assert_eq!(rejected.status.code(), Some(2));
+    assert!(stderr(&rejected).contains("only to the Go installer"));
+    assert!(!harness.was_invoked("npm"));
+
+    let failed = harness
+        .command(&["install", "--npm", "owner/tool"])
+        .env("DTR_TEST_EXIT", "23")
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(23));
+
+    let missing = Harness::new(&[]);
+    let output = missing.run(&["install", "--npm", "owner/tool"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("npm is required"));
+}
+
+#[test]
+fn npm_install_auto_switches_with_git_http_auth_only() {
+    let harness = Harness::new(&["npm", "gh"]);
+    assert!(
+        harness
+            .run(&[
+                "config",
+                "set",
+                "github.auth.auto_switch",
+                "mevanlc,mike-clark-8192",
+            ])
+            .status
+            .success()
+    );
+
+    let output = harness
+        .command(&["install", "--npm", "mike-clark-8192/tool"])
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "test.existing")
+        .env("GIT_CONFIG_VALUE_0", "preserved")
+        .env("GH_TOKEN", "parent-gh-token")
+        .env("GITHUB_TOKEN", "parent-github-token")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let npm = harness.invocation("npm");
+    assert_eq!(npm.git_config_count.as_deref(), Some("3"));
+    assert_eq!(
+        npm.git_config_keys,
+        [
+            "test.existing",
+            "http.https://github.com/.extraHeader",
+            "http.https://github.com/.extraHeader",
+        ]
+    );
+    assert!(npm.git_auth_header_present);
+    assert_eq!(npm.gh_token_account, None);
+    assert!(!npm.github_token_present);
+    assert!(!npm.uv_no_github_fast_path);
+}
+
+#[test]
+fn npm_auto_switch_fails_closed_before_npm() {
+    let harness = Harness::new(&["npm", "gh"]);
+    assert!(
+        harness
+            .run(&["config", "set", "github.auth.auto_switch", "mevanlc"])
+            .status
+            .success()
+    );
+    let output = harness
+        .command(&["install", "--npm", "mevanlc/tool"])
+        .env("DTR_TEST_GH_TOKEN_FAIL_ACCOUNT", "mevanlc")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("auto-switch account mevanlc"));
+    assert!(!harness.was_invoked("npm"));
+}
+
+#[test]
+fn npm_auto_switch_explain_is_exact_and_secret_free() {
+    let harness = Harness::new(&["npm", "gh"]);
+    assert!(
+        harness
+            .run(&[
+                "config",
+                "set",
+                "github.auth.auto_switch",
+                "mike-clark-8192",
+            ])
+            .status
+            .success()
+    );
+    let output = harness.run(&[
+        "-n",
+        "install",
+        "--npm",
+        "mike-clark-8192/tool",
+        "--",
+        "--force",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "repospec: GitHub repository mike-clark-8192/tool\n\
+backend:  npm\n\
+auth:     auto-switch to mike-clark-8192 (process-scoped; active gh account unchanged)\n\
+command:  npm install --global --force -- git+https://github.com/mike-clark-8192/tool.git\n"
+    );
+    assert!(!stdout(&output).contains("token"));
+    assert!(!stdout(&output).contains("Authorization"));
+    assert!(harness.was_invoked("gh-auth-token"));
+    assert!(!harness.was_invoked("npm"));
+}
+
+#[test]
+fn unmatched_npm_owner_does_not_auto_switch() {
+    let harness = Harness::new(&["npm"]);
+    let output = harness.run(&["install", "--npm", "cli/cli"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let npm = harness.invocation("npm");
+    assert!(!npm.git_auth_header_present);
+    assert!(!harness.was_invoked("gh-auth-token"));
+}
+
+#[test]
+fn install_help_lists_every_first_mvp_backend() {
+    let harness = Harness::new(&[]);
+    let output = harness.run(&["install", "--help"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let help = stdout(&output);
+    for selector in ["--go", "--rust", "--cargo", "--uv", "--pipx", "--npm"] {
+        assert!(help.contains(selector), "missing {selector} from:\n{help}");
     }
 }
 

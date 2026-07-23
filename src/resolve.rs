@@ -119,15 +119,17 @@ pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
         plan_cargo_install(args)
     } else if args.uv {
         plan_python_install(args, PythonBackend::Uv)
-    } else {
+    } else if args.pipx {
         plan_python_install(args, PythonBackend::Pipx)
+    } else {
+        plan_npm_install(args)
     }
 }
 
 fn plan_go_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
     if !args.install_args.is_empty() {
         return Err(DtrError::new(
-            "arguments after -- are supported only by the Rust/Cargo, uv, and pipx installers",
+            "arguments after -- are supported only by the Rust/Cargo, uv, pipx, and npm installers",
         ));
     }
     require_command("go", "installing a Go command")?;
@@ -329,6 +331,59 @@ fn plan_python_install(args: InstallArgs, backend: PythonBackend) -> Result<Comm
     })
 }
 
+fn plan_npm_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
+    if args.no_latest {
+        return Err(DtrError::new(
+            "--no-latest applies only to the Go installer",
+        ));
+    }
+    validate_npm_arguments(&args.install_args)?;
+    require_command("npm", "installing a JavaScript tool with npm")?;
+
+    let spec = RepoSpec::parse(&args.repospec)?;
+    let repospec = spec.description();
+    let owner = if matches!(spec, RepoSpec::GithubMine { .. }) {
+        Some(resolve_github_owner()?)
+    } else {
+        None
+    };
+    let source = spec.npm_package_source(owner.as_deref())?;
+    let mut auth = None;
+    let mut environment = Vec::new();
+    let mut removed_environment = Vec::new();
+
+    if let RepoSpec::Forge {
+        forge: Forge::GitHub,
+        namespace,
+        ..
+    } = &spec
+        && let Some(selection) = github_auth::select_for_owner(&namespace[0])?
+    {
+        auth = Some(format!(
+            "auto-switch to {} (process-scoped; active gh account unchanged)",
+            selection.account
+        ));
+        (environment, removed_environment) = github_auth::npm_git_environment(&selection.token)?;
+    }
+
+    let mut command_args = vec![OsString::from("install"), OsString::from("--global")];
+    command_args.extend(args.install_args);
+    command_args.extend([OsString::from("--"), source]);
+
+    Ok(CommandPlan {
+        program: "npm".into(),
+        args: command_args,
+        current_dir: None,
+        target_dir: None,
+        preparations: Vec::new(),
+        repospec,
+        backend: "npm",
+        auth,
+        environment,
+        removed_environment,
+    })
+}
+
 fn validate_pipx_arguments(arguments: &[OsString]) -> Result<(), DtrError> {
     for argument in arguments {
         let bytes = argument.as_encoded_bytes();
@@ -347,6 +402,33 @@ fn validate_pipx_arguments(arguments: &[OsString]) -> Result<(), DtrError> {
         {
             return Err(DtrError::new(
                 "pipx source option --lock conflicts with dtr's resolved repository",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_npm_arguments(arguments: &[OsString]) -> Result<(), DtrError> {
+    for argument in arguments {
+        let bytes = argument.as_encoded_bytes();
+        if bytes.first() != Some(&b'-') {
+            return Err(DtrError::new(
+                "npm option values after -- must use an attached spelling such as --prefix=/opt/npm; a separate value could be another package spec",
+            ));
+        }
+        if argument == "--" {
+            return Err(DtrError::new(
+                "a forwarded -- would bypass dtr's single-source npm boundary",
+            ));
+        }
+        if let Some(argument) = argument.to_str()
+            && (matches!(argument, "-g" | "--global" | "--no-global")
+                || argument.starts_with("-g=")
+                || argument.starts_with("--global=")
+                || argument.starts_with("--no-global="))
+        {
+            return Err(DtrError::new(
+                "npm global-mode options conflict with dtr's global repository install",
             ));
         }
     }
@@ -627,6 +709,33 @@ mod tests {
                 "{argument}"
             );
         }
+    }
+
+    #[test]
+    fn npm_arguments_preserve_only_unambiguous_non_global_options() {
+        assert!(
+            validate_npm_arguments(
+                &["--prefix=/opt/npm", "--force", "--ignore-scripts"].map(OsString::from)
+            )
+            .is_ok()
+        );
+        for argument in [
+            "another-package",
+            "/opt/npm",
+            "--",
+            "-g",
+            "-g=false",
+            "--global",
+            "--global=false",
+            "--no-global",
+            "--no-global=true",
+        ] {
+            assert!(
+                validate_npm_arguments(&[argument.into()]).is_err(),
+                "{argument}"
+            );
+        }
+        assert!(validate_npm_arguments(&["--global-style".into()]).is_ok());
     }
 
     #[cfg(unix)]

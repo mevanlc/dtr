@@ -335,6 +335,24 @@ impl RepoSpec {
         Ok(format!("git+{remote}").into())
     }
 
+    pub(crate) fn npm_package_source(
+        &self,
+        github_owner: Option<&str>,
+    ) -> Result<OsString, DtrError> {
+        if let Self::Local { path } = self {
+            return Ok(path.as_os_str().to_os_string());
+        }
+        let remote = self.install_git_remote(github_owner)?;
+        let remote_text = remote
+            .to_str()
+            .expect("non-local Git repository references are UTF-8");
+        if remote_text.starts_with("git://") {
+            Ok(remote)
+        } else {
+            Ok(format!("git+{remote_text}").into())
+        }
+    }
+
     pub(crate) fn is_local(&self) -> bool {
         matches!(self, Self::Local { .. })
     }
@@ -660,15 +678,42 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn python_source_preserves_a_non_utf8_local_path() {
+    fn package_sources_preserve_a_non_utf8_local_path() {
         use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
         let path = OsString::from_vec(b"./tool-\xff".to_vec());
         let spec = RepoSpec::parse(&path).unwrap();
         assert_eq!(spec.python_package_source(None).unwrap(), path);
+        assert_eq!(spec.npm_package_source(None).unwrap(), path);
         assert_eq!(
             spec.local_path().unwrap().as_os_str(),
             OsStr::from_bytes(b"./tool-\xff")
+        );
+    }
+
+    #[test]
+    fn npm_sources_use_supported_git_protocol_spellings() {
+        assert_eq!(
+            parse("owner/tool").npm_package_source(None).unwrap(),
+            OsString::from("git+https://github.com/owner/tool.git")
+        );
+        assert_eq!(
+            parse("https://example.com/tool.git")
+                .npm_package_source(None)
+                .unwrap(),
+            OsString::from("git+https://example.com/tool.git")
+        );
+        assert_eq!(
+            parse("git://example.com/owner/tool.git")
+                .npm_package_source(None)
+                .unwrap(),
+            OsString::from("git://example.com/owner/tool.git")
+        );
+        assert_eq!(
+            parse("git://example.com/owner/tool.git")
+                .python_package_source(None)
+                .unwrap(),
+            OsString::from("git+git://example.com/owner/tool.git")
         );
     }
 

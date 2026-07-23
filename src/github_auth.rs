@@ -80,6 +80,12 @@ pub(crate) fn python_git_environment(
     )
 }
 
+pub(crate) fn npm_git_environment(
+    token: &str,
+) -> Result<(Vec<SecretEnvironment>, Vec<OsString>), DtrError> {
+    github_git_environment(token, Vec::new())
+}
+
 fn github_git_environment(
     token: &str,
     mut environment: Vec<SecretEnvironment>,

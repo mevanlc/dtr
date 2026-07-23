@@ -4,8 +4,11 @@
 
 It accepts the repository reference you already have, resolves what it means,
 and invokes the appropriate underlying tool. It supports forge-aware cloning,
-process-scoped GitHub account selection, and Rust, Go, and Python tool
-installation from repositories on macOS and Linux.
+process-scoped GitHub account selection, and Rust, Go, Python, and JavaScript
+tool installation from repositories on macOS and Linux.
+
+The first-MVP feature set is complete in dtr 0.1.0. Its phase-by-phase finish
+line and completion audit are recorded in [devdocs/FIRST-MVP.md](devdocs/FIRST-MVP.md).
 
 ```console
 $ dtr --explain clone --depth 1 -O hjr265/gittop
@@ -28,6 +31,11 @@ $ dtr --explain install --uv astral-sh/ruff -- --force
 repospec: GitHub repository astral-sh/ruff
 backend:  uv
 command:  uv tool install git+https://github.com/astral-sh/ruff.git --force
+
+$ dtr --explain install --npm owner/tool -- --force
+repospec: GitHub repository owner/tool
+backend:  npm
+command:  npm install --global --force -- git+https://github.com/owner/tool.git
 
 $ dtr config set github.auth.auto_switch mevanlc,mike-clark-8192
 $ dtr --explain clone mike-clark-8192/foo
@@ -55,6 +63,7 @@ Cloning requires Git. Depending on the operation, dtr also uses:
 - Go for `dtr install --go`.
 - uv for `dtr install --uv`.
 - pipx for `dtr install --pipx`.
+- npm for `dtr install --npm`.
 
 When a forge CLI is unavailable, an owner-qualified GitHub or URL-qualified
 GitLab repository falls back to `git clone`. A bare repository name requires
@@ -127,12 +136,12 @@ process-scoped authentication only to the clone or remote-install child. It does
 not run `gh auth switch` or change the active GitHub CLI account. The operation
 uses HTTPS because selecting a token does not select an SSH key.
 
-GitHub-aware clones receive the token through `GH_TOKEN`. Rust and Python remote
-installs use the Git CLI and process-scoped Git configuration containing a
-URL-specific authorization header. Dtr extends any existing process-scoped Git
-configuration and removes inherited `GH_TOKEN` and `GITHUB_TOKEN` from installer
-children. No mode writes the token to disk or includes it in command arguments,
-explain output, or errors.
+GitHub-aware clones receive the token through `GH_TOKEN`. Rust, Python, and npm
+remote installs use the Git CLI and process-scoped Git configuration containing
+a URL-specific authorization header. Dtr extends any existing process-scoped
+Git configuration and removes inherited `GH_TOKEN` and `GITHUB_TOKEN` from
+installer children. No mode writes the token to disk or includes it in command
+arguments, explain output, or errors.
 
 An unmatched owner and a bare repository name retain normal active-account
 behavior. If an owner matches the allowlist but its stored token cannot be
@@ -161,6 +170,7 @@ dtr [--explain|-n] install|i --go [--no-latest] <dtr-repospec>
 dtr [--explain|-n] install|i <--rust|--cargo> <dtr-repospec> [-- <cargo-install-arg>...]
 dtr [--explain|-n] install|i --uv <dtr-repospec> [-- <uv-tool-install-arg>...]
 dtr [--explain|-n] install|i --pipx <dtr-repospec> [-- <pipx-install-option>...]
+dtr [--explain|-n] install|i --npm <dtr-repospec> [-- <npm-install-option>...]
 ```
 
 `install` is deliberately repo-oriented. Dtr does not wrap the package-registry
@@ -200,6 +210,26 @@ only option-shaped pipx arguments and puts its one resolved source after pipx's
 own `--`. Values therefore use attached forms such as `--python=3.14`; `--lock`
 is rejected as a conflicting alternate source.
 
+npm repositories map to local paths or npm Git package sources, then install
+globally:
+
+```sh
+dtr install --npm ./my-tool -- --prefix=/opt/npm
+# npm install --global --prefix=/opt/npm -- ./my-tool
+
+dtr install --npm owner/my-tool -- --force
+# npm install --global --force -- git+https://github.com/owner/my-tool.git
+```
+
+Current npm accepts multiple positional package specs, so dtr accepts only
+option-shaped npm arguments and puts its one resolved source after npm's own
+`--`. Option values use attached forms such as `--prefix=/opt/npm`. Dtr rejects
+forwarded global-mode options because repository installs through this backend
+are always global. npm owns package metadata, binary selection, dependencies,
+and lifecycle scripts; install only repositories you trust. Generic HTTP(S) and
+SSH remotes use npm's `git+` prefix; its native `git://` transport remains
+unprefixed because npm rejects `git+git://`.
+
 Remote Go repository installs receive `@latest` by default:
 
 ```sh
@@ -238,6 +268,7 @@ dtr -n clone -D owner/repo
 dtr --explain install --go owner/repo
 dtr --explain install --rust owner/repo -- --locked
 dtr --explain install --uv owner/repo -- --force
+dtr --explain install --npm owner/repo -- --force
 ```
 
 The position is intentional. Git already uses `clone -n` for `--no-checkout`,
@@ -258,16 +289,17 @@ starts the resolved clone/install operation or creates planned directories.
 - Forge browser-page URLs such as `/tree/` and `/-/blob/` are rejected rather
   than guessed at.
 - Literal `scp://` and `sftp://` staging is parked for a later milestone.
-- Go module paths that differ from their repository paths, automatic package
-  selection in monorepos, npm repository installs, GitLab/Enterprise account
-  selection, and Windows are later work.
+- Go module paths that differ from their repository paths, automatic package or
+  workspace selection in monorepos, GitLab/Enterprise account selection, and
+  Windows are later work.
 
 The overall finish line and phase status live in
 [devdocs/FIRST-MVP.md](devdocs/FIRST-MVP.md). Detailed design records and
 acceptance criteria live in [devdocs/PLAN-MVP00.md](devdocs/PLAN-MVP00.md),
 [devdocs/PLAN-MVP01.md](devdocs/PLAN-MVP01.md),
-[devdocs/PLAN-MVP02.md](devdocs/PLAN-MVP02.md), and
-[devdocs/PLAN-MVP03.md](devdocs/PLAN-MVP03.md).
+[devdocs/PLAN-MVP02.md](devdocs/PLAN-MVP02.md),
+[devdocs/PLAN-MVP03.md](devdocs/PLAN-MVP03.md), and
+[devdocs/PLAN-MVP04.md](devdocs/PLAN-MVP04.md).
 
 ## Development
 
