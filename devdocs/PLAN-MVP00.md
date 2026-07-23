@@ -1,6 +1,6 @@
 # dtr MVP00 plan
 
-Status: ready for implementation
+Status: implemented and validated on macOS and Linux (2026-07-23)
 
 ## Product definition
 
@@ -302,21 +302,20 @@ complete executable operation.
 
 Use Rust and Clap. Do not add an async runtime for MVP00.
 
-Suggested modules:
+Implemented modules:
 
 ```text
 src/
-  main.rs          process boundary and exit status
+  main.rs          minimal process entry point
+  lib.rs           operation dispatch and explain/execute boundary
   cli.rs           Clap root parser and dtr-owned options
   repospec.rs      ordered classification and normalization
   clone_args.rs    git-clone option/arity parsing
   resolve.rs       operation-to-backend resolution
   command.rs       typed command plan, rendering, and execution
-  backend/
-    git.rs
-    github.rs
-    gitlab.rs
-    go.rs
+  error.rs         focused dtr diagnostics
+tests/
+  cli.rs           PATH-isolated end-to-end backend tests
 ```
 
 Use a typed command plan:
@@ -327,7 +326,9 @@ struct CommandPlan {
     args: Vec<OsString>,
     current_dir: Option<PathBuf>,
     target_dir: Option<PathBuf>,
-    explanation: ResolutionExplanation,
+    preparations: Vec<PathBuf>,
+    repospec: String,
+    backend: &'static str,
 }
 ```
 
@@ -336,15 +337,15 @@ prevents the explained operation from drifting away from the executed one.
 
 Use `std::process::Command` directly, inherit stdin/stdout/stderr during normal
 execution, and return the child tool's exit status where the platform exposes
-one. Dtr-originated usage/resolution failures should use exit status 2 and
-prefix diagnostics with `dtr: error:`.
+one. Dtr-originated resolution failures use exit status 2 and prefix diagnostics
+with `dtr: error:`; Clap retains its native usage-error rendering.
 
 Dependencies should start small:
 
 - `clap` with derive support.
 - A URL parser suitable for strict hierarchical URL validation.
-- A shell-escaping/rendering crate only if it handles `OsStr` correctly on
-  Unix; otherwise implement and test the small display-only renderer locally.
+- The display-only shell renderer is implemented locally so non-UTF-8 `OsStr`
+  values remain unambiguous without affecting execution argv.
 
 ## Testing strategy
 
@@ -389,34 +390,46 @@ authenticated-forge tests are not part of the default suite.
 
 ## Implementation sequence
 
-1. Scaffold the Rust binary and Clap root command.
-2. Implement and table-test `RepoSpec` parsing.
-3. Implement typed `CommandPlan` plus explain rendering.
-4. Implement `git clone` planning/execution for local and generic remotes.
-5. Port the `gcl` short-help parsing contract and flexible clone option order.
-6. Add GitHub clone selection and exact `-O` / `-D` behavior.
-7. Add GitLab URL recognition and clone selection.
-8. Add `install --go`, default `@latest`, and `--no-latest`.
-9. Add stubbed end-to-end tests and complete the validation gates.
-10. Update README examples from the verified CLI help and behavior.
+1. [x] Scaffold the Rust binary and Clap root command.
+2. [x] Implement and table-test `RepoSpec` parsing.
+3. [x] Implement typed `CommandPlan` plus explain rendering.
+4. [x] Implement `git clone` planning/execution for local and generic remotes.
+5. [x] Port the `gcl` short-help parsing contract and flexible clone option order.
+6. [x] Add GitHub clone selection and exact `-O` / `-D` behavior.
+7. [x] Add GitLab URL recognition and clone selection.
+8. [x] Add `install --go`, default `@latest`, and `--no-latest`.
+9. [x] Add stubbed end-to-end tests and complete the validation gates.
+10. [x] Update README examples from the verified CLI help and behavior.
 
 ## MVP00 acceptance criteria
 
 MVP00 is complete when:
 
-- Every documented repospec is either resolved as specified or rejected with a
+- [x] Every documented repospec is either resolved as specified or rejected with a
   focused explanation.
-- Bare names and `owner/repo` use the documented GitHub defaults.
-- Local paths never collide with forge shorthand.
-- GitHub and GitLab URLs choose the appropriate available forge CLI and fall
+- [x] Bare names and `owner/repo` use the documented GitHub defaults.
+- [x] Local paths never collide with forge shorthand.
+- [x] GitHub and GitLab URLs choose the appropriate available forge CLI and fall
   back exactly as documented.
-- `-O` and `-D` preserve their literal directory-layout contracts.
-- Native Git clone options survive parsing and backend translation.
-- `dtr install --go` converts supported remote repo references to Go import
+- [x] `-O` and `-D` preserve their literal directory-layout contracts.
+- [x] Native Git clone options survive parsing and backend translation.
+- [x] `dtr install --go` converts supported remote repo references to Go import
   paths, adds `@latest` by default, and honors `--no-latest`.
-- `dtr -n ...` explains the exact `CommandPlan` and performs no mutation.
-- No command is executed through a shell.
-- The focused and full validation gates pass on macOS and Linux.
+- [x] `dtr -n ...` explains the exact `CommandPlan` and performs no mutation.
+- [x] No command is executed through a shell.
+- [x] The focused and full validation gates pass on macOS and Linux.
+
+### Validation record
+
+- macOS: `cargo nextest run` passes all 43 unit and PATH-isolated integration
+  tests.
+- Linux: the Rust 1.97 slim container passes formatting, Clippy with warnings
+  denied, all 43 tests through Cargo's built-in harness (nextest is absent in
+  the clean container), and `cargo check`.
+- `actionlint` passes the GitHub Actions workflow, which runs the normal nextest
+  gate on both `ubuntu-latest` and `macos-latest`.
+- Live macOS explain-mode checks cover authenticated bare-name resolution,
+  GitHub CLI selection, GitLab fallback, local targets, and Go import paths.
 
 ## Parked for MVP01+
 
