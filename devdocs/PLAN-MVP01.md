@@ -2,6 +2,8 @@
 
 Status: implemented and validated on macOS and Linux (2026-07-23)
 
+Roadmap: [dtr first MVP](FIRST-MVP.md), phase 2 of 5
+
 ## Product increment
 
 MVP01 teaches `dtr clone` to choose the right authenticated GitHub account when

@@ -2,6 +2,8 @@
 
 Status: implemented and validated on macOS and Linux (2026-07-23)
 
+Roadmap: [dtr first MVP](FIRST-MVP.md), phase 1 of 5
+
 ## Product definition
 
 `dtr` means **do/develop the right repo**.

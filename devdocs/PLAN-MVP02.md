@@ -2,6 +2,8 @@
 
 Status: implemented and validated (2026-07-23)
 
+Roadmap: [dtr first MVP](FIRST-MVP.md), phase 3 of 5
+
 ## Product increment
 
 MVP02 returns to dtr's central repository-install surface by adding Rust/Cargo

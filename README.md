@@ -236,8 +236,9 @@ starts the resolved clone/install operation or creates planned directories.
   selection in monorepos, uv/pipx/npm repository installs, GitLab/Enterprise
   account selection, and Windows are later work.
 
-The design records and acceptance criteria live in
-[devdocs/PLAN-MVP00.md](devdocs/PLAN-MVP00.md) and
+The overall finish line and phase status live in
+[devdocs/FIRST-MVP.md](devdocs/FIRST-MVP.md). Detailed design records and
+acceptance criteria live in [devdocs/PLAN-MVP00.md](devdocs/PLAN-MVP00.md),
 [devdocs/PLAN-MVP01.md](devdocs/PLAN-MVP01.md), and
 [devdocs/PLAN-MVP02.md](devdocs/PLAN-MVP02.md).
 
