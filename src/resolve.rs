@@ -9,7 +9,7 @@ use crate::error::DtrError;
 use crate::github_auth;
 use crate::github_auth::GithubAuthSelection;
 use crate::install_detect;
-use crate::repospec::{Forge, RepoSpec};
+use crate::repospec::{Forge, InstallSource, RepoSpec};
 
 pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError> {
     if request.name_mode != NameMode::Default
@@ -116,7 +116,19 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
 
 pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
     let requested_tool = args.tool;
-    let spec = RepoSpec::parse(&args.repospec)?;
+    let InstallSource { spec, go_query } = InstallSource::parse(&args.repospec)?;
+    if go_query.is_some() && args.no_latest {
+        return Err(DtrError::new(
+            "an explicit Go version query conflicts with --no-latest",
+        ));
+    }
+    if let Some(query) = &go_query
+        && !matches!(requested_tool, InstallTool::Auto | InstallTool::Go)
+    {
+        return Err(DtrError::new(format!(
+            "Go version query @{query} requires --tool go, but {requested_tool} was selected"
+        )));
+    }
     let github_owner = if matches!(spec, RepoSpec::GithubMine { .. }) {
         Some(resolve_github_owner()?)
     } else {
@@ -132,9 +144,17 @@ pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
     } else {
         requested_tool
     };
+    if let Some(query) = &go_query
+        && selected_tool != InstallTool::Go
+    {
+        return Err(DtrError::new(format!(
+            "Go version query @{query} requires --tool go, but {selected_tool} was selected"
+        )));
+    }
     let context = InstallContext {
         args,
         spec,
+        go_query,
         github_owner,
         github_selection,
     };
@@ -152,6 +172,7 @@ pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
 struct InstallContext {
     args: InstallArgs,
     spec: RepoSpec,
+    go_query: Option<String>,
     github_owner: Option<String>,
     github_selection: GithubSelection,
 }
@@ -192,6 +213,7 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
     let InstallContext {
         args,
         spec,
+        go_query,
         github_owner,
         ..
     } = context;
@@ -228,7 +250,10 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
     }
 
     let mut import_path = spec.go_import_path(github_owner.as_deref())?;
-    if !args.no_latest {
+    if let Some(query) = go_query {
+        import_path.push('@');
+        import_path.push_str(&query);
+    } else if !args.no_latest {
         import_path.push_str("@latest");
     }
 
@@ -252,6 +277,7 @@ fn plan_cargo_install(context: InstallContext) -> Result<CommandPlan, DtrError> 
         spec,
         github_owner,
         github_selection,
+        ..
     } = context;
     if args.no_latest {
         return Err(DtrError::new(
@@ -331,6 +357,7 @@ fn plan_python_install(
         spec,
         github_owner,
         github_selection,
+        ..
     } = context;
     if args.no_latest {
         return Err(DtrError::new(
@@ -390,6 +417,7 @@ fn plan_npm_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
         spec,
         github_owner,
         github_selection,
+        ..
     } = context;
     if args.no_latest {
         return Err(DtrError::new(

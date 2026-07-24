@@ -4,7 +4,16 @@ Status: implemented and validated on macOS and Linux (2026-07-23)
 
 Roadmap: [dtr first MVP](FIRST-MVP.md), phase 4 of 5
 
-## Product increment
+※ Historical note: this document records the interface and scope delivered by
+MVP03. Its `--uv` / `--pipx` selector spellings and statements that Python
+backend selection or repository inspection were excluded are intentionally
+preserved as phase history. The current install interface is documented in
+[PLAN-AUTO-INSTALL.md](PLAN-AUTO-INSTALL.md).
+
+A marked statement or section contains interface or roadmap status that has
+since been superseded.
+
+## ※ Product increment
 
 MVP03 adds repository-oriented Python tool installation through uv and pipx:
 
@@ -22,7 +31,7 @@ account-selection policy to Git fetches.
 
 MVP03 delivers:
 
-- Explicit `--uv` and `--pipx` installer selectors.
+- ※ Explicit `--uv` and `--pipx` installer selectors.
 - Local repository installation through `uv tool install` and `pipx install`.
 - Remote repository conversion to Python VCS requirement URLs.
 - Explicit native installer arguments after dtr's `--` separator.
@@ -32,12 +41,12 @@ MVP03 delivers:
 - Exact, secret-free `--explain` output.
 - PATH-isolated coverage, real local-package smoke tests, and macOS/Linux gates.
 
-MVP03 intentionally does not include PyPI package installation, automatic
+※ MVP03 intentionally does not include PyPI package installation, automatic
 uv-versus-pipx selection, repository inspection, monorepo subdirectory
 selection, literal `scp://` or `sftp://` staging, or non-GitHub account
 selection. Dtr does not install pipx when the user selects it but it is absent.
 
-## Usage as the functional requirements document
+## ※ Usage as the functional requirements document
 
 ```text
 dtr [--explain|-n] install|i --uv <dtr-repospec>
@@ -68,7 +77,7 @@ command:  pipx install --python=3.14 --force -- git+https://github.com/owner/too
 The Go, Rust, uv, and pipx selectors are mutually exclusive. `--no-latest`
 remains Go-only and is rejected by every other backend.
 
-## Repository mapping
+## ※ Repository mapping
 
 Local paths are passed directly:
 
@@ -98,7 +107,7 @@ git@example.com:/srv/tool.git           git+ssh://git@example.com/srv/tool.git
 A bare name resolves the current GitHub owner with `gh`. Literal `scp://` and
 `sftp://` retain the parked-feature error.
 
-## Native installer arguments
+## ※ Native installer arguments
 
 Dtr accepts native arguments only after its separator. Go continues to reject
 them; Cargo behavior remains unchanged. Uv receives its source first and native
@@ -120,7 +129,7 @@ package without duplicating pipx's evolving option parser. A forwarded
 standalone `--` is rejected. Pipx's `--lock` is rejected because it supplies an
 alternate installation source that conflicts with the repospec.
 
-## GitHub account auto-switching
+## ※ GitHub account auto-switching
 
 An explicit GitHub owner matching `github.auth.auto_switch` applies to both
 Python backends. Dtr:
@@ -149,7 +158,7 @@ Python build backends and legacy setup code execute with the user's permissions,
 as they do for direct uv or pipx installation. Users must trust repositories
 they install.
 
-## Explain and implementation
+## ※ Explain and implementation
 
 The command plan renders the normalized repospec, backend, optional account
 decision, and exact child argv. Secret environment remains omitted. Explain may
@@ -167,7 +176,7 @@ tests/cli.rs        PATH-isolated argv, auth, and safety behavior
 
 No shell command string is constructed for the resolved install operation.
 
-## Testing and validation
+## ※ Testing and validation
 
 Tests cover selector exclusivity; source mapping for every repospec family;
 non-UTF-8 values; pipx single-source restrictions; exact uv/pipx argv; missing
@@ -188,7 +197,7 @@ git diff --check
 The suite runs on macOS and Linux. Real local-package smoke tests use isolated uv
 and pipx homes. Live account validation is explain-only and displays no secrets.
 
-## Implementation sequence
+## ※ Implementation sequence
 
 1. [x] Add uv/pipx selectors and generalize the argument boundary.
 2. [x] Add Python local/VCS source conversion.
@@ -199,7 +208,7 @@ and pipx homes. Live account validation is explain-only and displays no secrets.
 7. [x] Validate real local installs and live explain behavior.
 8. [x] Complete macOS/Linux gates, install, and milestone commit.
 
-## MVP03 acceptance criteria
+## ※ MVP03 acceptance criteria
 
 - [x] `--uv` and `--pipx` conflict with every other installer selector.
 - [x] Local paths and remote `git+<URL>` sources map exactly.
@@ -212,7 +221,7 @@ and pipx homes. Live account validation is explain-only and displays no secrets.
 - [x] No resolved install operation is executed through a shell.
 - [x] All validation gates pass on macOS and Linux.
 
-## Validation record
+## ※ Validation record
 
 Completed on 2026-07-23:
 

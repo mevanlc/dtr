@@ -281,7 +281,19 @@ dtr install --tool go https://github.com/hjr265/gittop
 
 dtr i --tool go --no-latest hjr265/gittop
 # go install github.com/hjr265/gittop
+
+dtr install https://github.com/yuser/reepo@some-go-stuff
+# auto inspects yuser/reepo, selects Go, then runs:
+# go install github.com/yuser/reepo@some-go-stuff
 ```
+
+A remote install repospec may end in a Go version query such as a version,
+branch, tag, or revision. Dtr separates the suffix before repository inspection,
+so forge APIs and Git inspect the base repository. Auto mode still requires the
+base repository to identify as Go; the suffix alone does not force a backend.
+An explicit query is accepted only by Go and conflicts with `--no-latest`.
+An `@` in an explicit local path remains part of that path, and SSH usernames
+such as `git@example.com` are not mistaken for queries.
 
 A bare name uses the current GitHub user:
 
@@ -337,13 +349,18 @@ the resolved clone/install operation or creates its planned target directories.
   workspace selection in monorepos, GitLab/Enterprise account selection, and
   Windows are later work.
 
-The overall finish line and phase status live in
-[devdocs/FIRST-MVP.md](devdocs/FIRST-MVP.md). Detailed design records and
-acceptance criteria live in [devdocs/PLAN-MVP00.md](devdocs/PLAN-MVP00.md),
+The overall finish line and current roadmap status live in
+[devdocs/FIRST-MVP.md](devdocs/FIRST-MVP.md). The current automatic install
+selection design is recorded in
+[devdocs/PLAN-AUTO-INSTALL.md](devdocs/PLAN-AUTO-INSTALL.md). Historical
+first-MVP design records and acceptance criteria live in
+[devdocs/PLAN-MVP00.md](devdocs/PLAN-MVP00.md),
 [devdocs/PLAN-MVP01.md](devdocs/PLAN-MVP01.md),
 [devdocs/PLAN-MVP02.md](devdocs/PLAN-MVP02.md),
 [devdocs/PLAN-MVP03.md](devdocs/PLAN-MVP03.md), and
 [devdocs/PLAN-MVP04.md](devdocs/PLAN-MVP04.md).
+Within those historical records, `※` marks statements and sections superseded
+by the current install interface or roadmap status.
 
 ## Development
 

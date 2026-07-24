@@ -1,6 +1,10 @@
 # dtr first MVP roadmap
 
-Status: complete — 5 of 5 phases complete (2026-07-23)
+Status: complete — 5 of 5 phases complete; automatic install selection was
+delivered as a post-MVP increment (2026-07-23)
+
+`※` marks a historical statement or section whose interface or roadmap status
+has since been superseded by [PLAN-AUTO-INSTALL.md](PLAN-AUTO-INSTALL.md).
 
 ## Document hierarchy
 
@@ -10,6 +14,8 @@ The names have two levels:
 - **MVP00** through **MVP04** are implementation phases within that milestone.
 - `PLAN-MVPnn.md` is the detailed functional requirements and validation record
   for one phase.
+- [PLAN-AUTO-INSTALL.md](PLAN-AUTO-INSTALL.md) records the completed post-MVP
+  automatic install-selection increment.
 
 The phase count is deliberate. New work should not silently become another
 `MVPnn` phase: changing the first-MVP finish line or phase count requires an
@@ -22,7 +28,7 @@ The first MVP fulfills dtr's original repo-oriented promise on macOS and Linux:
 - One deterministic `<dtr-repospec>` grammar for local paths, forge shorthand,
   forge URLs, generic Git URLs, and SCP-like Git remotes.
 - `dtr clone` with GitHub/GitLab awareness and native Git clone options.
-- `dtr install` from repositories using the Go, Rust/Cargo, uv, pipx, and npm
+- ※ `dtr install` from repositories using the Go, Rust/Cargo, uv, pipx, and npm
   ecosystems explicitly selected by the user.
 - Process-scoped GitHub account auto-switching for operations where an explicit
   repository owner identifies an allowlisted GitHub CLI account.
@@ -42,7 +48,7 @@ local-filesystem, Git-remote, and forge-aware repository surfaces.
 | [MVP00](PLAN-MVP00.md) | Complete | Common repospec resolver, clone, Go repository install, explain, and macOS/Linux foundation. |
 | [MVP01](PLAN-MVP01.md) | Complete | Configuration and race-free, process-scoped GitHub account auto-switching. |
 | [MVP02](PLAN-MVP02.md) | Complete | Rust/Cargo local and Git repository installation, including GitHub auth propagation. |
-| [MVP03](PLAN-MVP03.md) | Complete | Python repository installation through explicit `--uv` and `--pipx` backends. |
+| ※ [MVP03](PLAN-MVP03.md) | Complete | Python repository installation through explicit `--uv` and `--pipx` backends. |
 | [MVP04](PLAN-MVP04.md) | Complete | npm repository installation plus cross-backend consistency, documentation, and first-MVP release closure. |
 
 This is 5 of 5 phases complete. That fraction describes roadmap position, not
@@ -51,7 +57,7 @@ validated product increments rather than equal amounts of work.
 
 ## Phase intent
 
-### MVP03 — Python repository installation (complete)
+### ※ MVP03 — Python repository installation (complete)
 
 [PLAN-MVP03.md](PLAN-MVP03.md) defines and validates:
 
@@ -63,9 +69,11 @@ validated product increments rather than equal amounts of work.
 - PATH-isolated tests, live local-repository smoke validation, and macOS/Linux
   gates.
 
-Automatic Python backend selection and repository inspection remain parked.
+At first-MVP closure, automatic Python backend selection and repository
+inspection remained parked. They were subsequently delivered by
+[the automatic install-selection increment](PLAN-AUTO-INSTALL.md).
 
-### MVP04 — npm and first-MVP closure
+### ※ MVP04 — npm and first-MVP closure
 
 [PLAN-MVP04.md](PLAN-MVP04.md) defines and validates:
 
@@ -78,9 +86,11 @@ Automatic Python backend selection and repository inspection remain parked.
 MVP04 may repair inconsistencies found in completed phases, but it is not a
 catch-all for unrelated features.
 
-## First-MVP completion audit
+## ※ First-MVP completion audit (historical)
 
-Completed on 2026-07-23 against the finish line above:
+Completed on 2026-07-23 against the finish line above. Counts and interface
+spellings in this section are the first-MVP closure snapshot; current behavior
+and validation are recorded in [PLAN-AUTO-INSTALL.md](PLAN-AUTO-INSTALL.md).
 
 | Finish-line requirement | Completion evidence |
 |---|---|
@@ -96,9 +106,14 @@ The first-MVP feature set is release-ready as dtr 0.1.0 and installed from this
 checkout. Publishing, pushing, and creating a Git tag are separate user-directed
 release actions and were not performed by this roadmap closure.
 
-## Explicitly after the first MVP
+## Delivered after the first MVP
 
-- Automatic installer detection by inspecting a repository.
+- [Automatic install tool selection](PLAN-AUTO-INSTALL.md), including the
+  unified `--tool` option, conservative root-manifest inference, Python backend
+  selection, forge API inspection, and filtered Git fallback.
+
+## Remaining after the first MVP
+
 - Literal `scp://` and `sftp://` download/staging workflows.
 - Configurable default forge, host, source, or account for shorthand repospecs.
 - GitHub Enterprise, GitLab, and generic-host account selection.

@@ -4,6 +4,15 @@ Status: implemented and validated on macOS and Linux (2026-07-23)
 
 Roadmap: [dtr first MVP](FIRST-MVP.md), phase 1 of 5
 
+※ Historical note: this document records the interface and scope delivered by
+MVP00. Its `--go` spelling and statements that other backends or automatic
+selection are future work are intentionally preserved as phase history. The
+current install interface and the completed automatic-selection increment are
+documented in [PLAN-AUTO-INSTALL.md](PLAN-AUTO-INSTALL.md).
+
+A marked statement or section contains interface or roadmap status that has
+since been superseded.
+
 ## Product definition
 
 `dtr` means **do/develop the right repo**.
@@ -26,7 +35,7 @@ The guiding behavior is:
 MVP00 delivers the common repository resolver and two end-to-end operations:
 
 - `dtr clone`, covering the supported repository-reference grammar.
-- `dtr install --go`, proving that the same reference can drive a non-clone
+- ※ `dtr install --go`, proving that the same reference can drive a non-clone
   repo operation.
 - `dtr -n` / `dtr --explain`, resolving and printing without performing the
   final operation.
@@ -37,14 +46,17 @@ MVP00 intentionally does not include:
 - Registry package installation. Use `cargo install <crate>`,
   `go install <package>`, `uv tool install <package>`,
   `pipx install <package>`, or `npm install -g <package>` directly.
-- Automatic installer selection.
-- Rust/Cargo, uv, pipx, or npm repo-install backends.
+- ※ Automatic installer selection.
+- ※ Rust/Cargo, uv, pipx, or npm repo-install backends.
 - `scp://` or `sftp://` staging through a temporary directory.
 - Configuration files, a plugin system, `doctor`, JSON output, update, or
   uninstall operations.
 - Windows support.
 
 ## Usage as the functional requirements document
+
+※ The install form below is the phase-era interface; the clone form remains
+current.
 
 ```text
 dtr [--explain|-n] clone [clone-options] <dtr-repospec> [dir]
@@ -134,7 +146,7 @@ Recognized `git clone` options may appear in normal `git clone`-style positions.
 Rust implementation of the proven `gcl` parsing contract. When the selected
 backend is `gh` or `glab`, Git options are placed after the backend's `--`.
 
-### Go repo installation
+### ※ Go repo installation
 
 ```text
 dtr install --go <dtr-repospec>
@@ -191,7 +203,7 @@ MVP00 installs remote repository-root Go commands only. Discovering a module
 path that differs from its repository URL, choosing among multiple commands,
 and selecting a package below the repository root are later design work.
 
-The `--go` selector is required in MVP00 even though it is the only installer.
+※ The `--go` selector is required in MVP00 even though it is the only installer.
 Leaving the selector out is reserved for later repository inspection and
 automatic backend selection.
 
@@ -267,7 +279,7 @@ both GitHub CLI and GitLab CLI accept Git options after `--`. The adapters
 should preserve those native behaviors rather than reimplement authentication
 or fork/upstream handling.
 
-### Install
+### ※ Install
 
 MVP00 has one backend:
 
@@ -399,7 +411,7 @@ authenticated-forge tests are not part of the default suite.
 5. [x] Port the `gcl` short-help parsing contract and flexible clone option order.
 6. [x] Add GitHub clone selection and exact `-O` / `-D` behavior.
 7. [x] Add GitLab URL recognition and clone selection.
-8. [x] Add `install --go`, default `@latest`, and `--no-latest`.
+8. [x] ※ Add `install --go`, default `@latest`, and `--no-latest`.
 9. [x] Add stubbed end-to-end tests and complete the validation gates.
 10. [x] Update README examples from the verified CLI help and behavior.
 
@@ -415,13 +427,13 @@ MVP00 is complete when:
   back exactly as documented.
 - [x] `-O` and `-D` preserve their literal directory-layout contracts.
 - [x] Native Git clone options survive parsing and backend translation.
-- [x] `dtr install --go` converts supported remote repo references to Go import
+- [x] ※ `dtr install --go` converts supported remote repo references to Go import
   paths, adds `@latest` by default, and honors `--no-latest`.
 - [x] `dtr -n ...` explains the exact `CommandPlan` and performs no mutation.
 - [x] No command is executed through a shell.
 - [x] The focused and full validation gates pass on macOS and Linux.
 
-### Validation record
+### ※ Validation record
 
 - macOS: `cargo nextest run` passes all 43 unit and PATH-isolated integration
   tests.
@@ -433,7 +445,7 @@ MVP00 is complete when:
 - Live macOS explain-mode checks cover authenticated bare-name resolution,
   GitHub CLI selection, GitLab fallback, local targets, and Go import paths.
 
-## Parked for MVP01+
+## ※ Parked for MVP01+
 
 - `dtr install [--rust|--cargo|--uv|--pipx|--npm] <repospec>`.
 - Omit the install selector and inspect repository metadata to select a backend.

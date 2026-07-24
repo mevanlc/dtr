@@ -4,7 +4,16 @@ Status: implemented and validated on macOS and Linux (2026-07-23)
 
 Roadmap: [dtr first MVP](FIRST-MVP.md), phase 5 of 5
 
-## Product increment
+※ Historical note: this document records the interface and scope delivered by
+MVP04. Its `--npm` selector spelling and statements that automatic installer
+detection was excluded are intentionally preserved as phase history. The
+current install interface and the completed automatic-selection increment are
+documented in [PLAN-AUTO-INSTALL.md](PLAN-AUTO-INSTALL.md).
+
+A marked statement or section contains interface or roadmap status that has
+since been superseded.
+
+## ※ Product increment
 
 MVP04 adds repository-oriented JavaScript tool installation through npm and
 closes the first MVP:
@@ -22,7 +31,7 @@ account-selection policy to Git fetches.
 
 MVP04 delivers:
 
-- The explicit `--npm` installer selector.
+- ※ The explicit `--npm` installer selector.
 - Global installation from local and Git repositories.
 - Explicit native npm arguments after dtr's `--` separator.
 - A single-source safety boundary for npm's multi-package install command.
@@ -32,11 +41,11 @@ MVP04 delivers:
 - Cross-backend help, errors, documentation, and regression coverage.
 - Real local-package smoke tests, macOS/Linux gates, and a first-MVP audit.
 
-MVP04 intentionally does not include npm registry packages, automatic installer
+※ MVP04 intentionally does not include npm registry packages, automatic installer
 detection, monorepo workspace selection, literal `scp://` or `sftp://` staging,
 non-GitHub account selection, release publishing, or Git tags.
 
-## Usage as the functional requirements document
+## ※ Usage as the functional requirements document
 
 ```text
 dtr [--explain|-n] install|i --npm <dtr-repospec>
@@ -60,7 +69,7 @@ command:  npm install --global --force -- git+https://github.com/owner/tool.git
 The Go, Rust, uv, pipx, and npm selectors are mutually exclusive.
 `--no-latest` remains Go-only and is rejected by every other backend.
 
-## Repository mapping
+## ※ Repository mapping
 
 Local paths are passed directly. Remote repositories receive npm's Git package
 source spelling after shared Git remote normalization:
@@ -80,7 +89,7 @@ A bare name resolves the current GitHub owner with `gh`. Literal `scp://` and
 selection, dependency installation, lifecycle scripts, and their diagnostics.
 Users must trust repositories they install.
 
-## Native installer arguments
+## ※ Native installer arguments
 
 Dtr invokes:
 
@@ -100,7 +109,7 @@ rejected. `-g`, `--global`, `--no-global`, and their value forms are rejected
 because dtr owns the global-install invariant; `--global-style` remains a
 distinct valid npm option.
 
-## GitHub account auto-switching
+## ※ GitHub account auto-switching
 
 An explicit GitHub owner matching `github.auth.auto_switch` applies to npm. Dtr:
 
@@ -120,7 +129,7 @@ debug output.
 Unmatched owners and bare names retain native active-account behavior. A
 matched owner whose token cannot be retrieved fails before npm starts.
 
-## Explain and implementation
+## ※ Explain and implementation
 
 The command plan renders the normalized repospec, `npm` backend, optional account
 decision, and exact child argv. Secret environment remains omitted. Explain may
@@ -138,7 +147,7 @@ tests/cli.rs        PATH-isolated argv, auth, help, and safety behavior
 
 No shell command string is constructed for the resolved install operation.
 
-## Testing and validation
+## ※ Testing and validation
 
 Tests cover selector exclusivity; source mapping for every repospec family;
 non-UTF-8 paths and arguments; npm single-source and global-mode restrictions;
@@ -161,7 +170,7 @@ The suite runs on macOS and Linux. A real local npm CLI package is installed and
 executed with an isolated global prefix. Live account validation is explain-only
 and displays no secrets.
 
-## Implementation sequence
+## ※ Implementation sequence
 
 1. [x] Add the npm selector and npm package-source mapping.
 2. [x] Plan an exact global npm invocation with a single-source boundary.
@@ -172,7 +181,7 @@ and displays no secrets.
 7. [x] Complete macOS/Linux gates, install, and milestone commit.
 8. [x] Audit and close the first-MVP roadmap.
 
-## MVP04 acceptance criteria
+## ※ MVP04 acceptance criteria
 
 - [x] `--npm` conflicts with every other installer selector.
 - [x] Local paths and remote npm Git sources map exactly.
@@ -186,7 +195,7 @@ and displays no secrets.
 - [x] No resolved operation is executed through a shell.
 - [x] All validation gates pass on macOS and Linux.
 
-## Validation record
+## ※ Validation record
 
 Completed on 2026-07-23:
 

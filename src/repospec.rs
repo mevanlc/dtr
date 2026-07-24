@@ -41,6 +41,41 @@ pub(crate) enum RepoSpec {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InstallSource {
+    pub(crate) spec: RepoSpec,
+    pub(crate) go_query: Option<String>,
+}
+
+impl InstallSource {
+    pub(crate) fn parse(value: &OsStr) -> Result<Self, DtrError> {
+        let path = Path::new(value);
+        if path.is_absolute() || is_explicit_relative(value) {
+            return Ok(Self {
+                spec: RepoSpec::parse(value)?,
+                go_query: None,
+            });
+        }
+
+        let text = value.to_str().ok_or_else(|| {
+            DtrError::new(
+                "non-UTF-8 repository references must be local paths beginning /, ./, or ../",
+            )
+        })?;
+        let Some((base, query)) = split_install_query(text)? else {
+            return Ok(Self {
+                spec: RepoSpec::parse(value)?,
+                go_query: None,
+            });
+        };
+
+        Ok(Self {
+            spec: RepoSpec::parse(OsStr::new(&base))?,
+            go_query: Some(query),
+        })
+    }
+}
+
 impl RepoSpec {
     pub(crate) fn parse(value: &OsStr) -> Result<Self, DtrError> {
         let path = Path::new(value);
@@ -414,6 +449,53 @@ fn has_supported_url_scheme(text: &str) -> bool {
         .any(|scheme| text.starts_with(scheme))
 }
 
+fn split_install_query(text: &str) -> Result<Option<(String, String)>, DtrError> {
+    if has_supported_url_scheme(text) {
+        let mut url = Url::parse(text)
+            .map_err(|error| DtrError::new(format!("invalid repository URL: {error}")))?;
+        let Some((base_path, query)) = url.path().split_once('@') else {
+            return Ok(None);
+        };
+        let base_path = base_path.to_owned();
+        let query = validate_go_query(query)?;
+        url.set_path(&base_path);
+        return Ok(Some((url.into(), query)));
+    }
+
+    if let Some((prefix, path)) = text.split_once(':') {
+        if let Some((base_path, query)) = path.split_once('@') {
+            let query = validate_go_query(query)?;
+            return Ok(Some((format!("{prefix}:{base_path}"), query)));
+        }
+        return Ok(None);
+    }
+
+    let Some((base, query)) = text.split_once('@') else {
+        return Ok(None);
+    };
+    Ok(Some((base.to_owned(), validate_go_query(query)?)))
+}
+
+fn validate_go_query(query: &str) -> Result<String, DtrError> {
+    if query.is_empty() {
+        return Err(DtrError::new("Go version query after @ must not be empty"));
+    }
+    if query.contains('@') {
+        return Err(DtrError::new("Go version query must not contain another @"));
+    }
+    if query.contains('%') {
+        return Err(DtrError::new(
+            "Go version query must not use percent-encoded characters",
+        ));
+    }
+    if query.chars().any(char::is_whitespace) {
+        return Err(DtrError::new(
+            "Go version query must not contain whitespace",
+        ));
+    }
+    Ok(query.to_owned())
+}
+
 fn normalized_segments(path: &str) -> Result<Vec<String>, DtrError> {
     let trimmed = path.trim_matches('/');
     if trimmed.is_empty() {
@@ -532,6 +614,10 @@ mod tests {
         RepoSpec::parse(OsStr::new(value)).expect("repospec should parse")
     }
 
+    fn parse_install(value: &str) -> InstallSource {
+        InstallSource::parse(OsStr::new(value)).expect("install source should parse")
+    }
+
     #[test]
     fn classifies_explicit_local_paths_before_shorthand() {
         assert!(matches!(parse("./owner/repo"), RepoSpec::Local { .. }));
@@ -564,6 +650,66 @@ mod tests {
         assert_eq!(
             spec.go_import_path(None).unwrap(),
             "github.com/hjr265/gittop"
+        );
+    }
+
+    #[test]
+    fn install_sources_separate_go_queries_from_remote_repositories() {
+        for (value, expected_remote, expected_query) in [
+            (
+                "https://github.com/yuser/reepo@some-go-stuff",
+                "https://github.com/yuser/reepo.git",
+                "some-go-stuff",
+            ),
+            (
+                "owner/reepo@feature/branch",
+                "https://github.com/owner/reepo.git",
+                "feature/branch",
+            ),
+            (
+                "git@example.com:owner/reepo.git@deadbeef",
+                "ssh://git@example.com/~/owner/reepo.git",
+                "deadbeef",
+            ),
+        ] {
+            let source = parse_install(value);
+            assert_eq!(source.go_query.as_deref(), Some(expected_query), "{value}");
+            assert_eq!(
+                source.spec.install_git_remote(None).unwrap(),
+                OsString::from(expected_remote),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn install_query_parsing_preserves_local_at_signs_and_ssh_usernames() {
+        let local = parse_install("./reepo@some-go-stuff");
+        assert!(matches!(local.spec, RepoSpec::Local { .. }));
+        assert_eq!(local.go_query, None);
+
+        let ssh = parse_install("git@example.com:owner/reepo.git");
+        assert!(matches!(ssh.spec, RepoSpec::ScpLike { .. }));
+        assert_eq!(ssh.go_query, None);
+    }
+
+    #[test]
+    fn install_queries_reject_empty_repeated_and_percent_encoded_values() {
+        for value in [
+            "owner/reepo@",
+            "owner/reepo@one@two",
+            "https://github.com/owner/reepo@feature%2Fbranch",
+        ] {
+            assert!(InstallSource::parse(OsStr::new(value)).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn ordinary_repospec_parsing_keeps_clone_at_sign_semantics_unchanged() {
+        let spec = parse("https://github.com/yuser/reepo@some-go-stuff");
+        assert_eq!(
+            spec.forge_slug().as_deref(),
+            Some("yuser/reepo@some-go-stuff")
         );
     }
 

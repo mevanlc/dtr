@@ -4,7 +4,16 @@ Status: implemented and validated (2026-07-23)
 
 Roadmap: [dtr first MVP](FIRST-MVP.md), phase 3 of 5
 
-## Product increment
+※ Historical note: this document records the interface and scope delivered by
+MVP02. Its `--rust` / `--cargo` selector spellings and statements that automatic
+selection was excluded are intentionally preserved as phase history. The
+current interface uses `--tool cargo`, accepts `rust` as a value alias, and is
+documented in [PLAN-AUTO-INSTALL.md](PLAN-AUTO-INSTALL.md).
+
+A marked statement or section contains interface or roadmap status that has
+since been superseded.
+
+## ※ Product increment
 
 MVP02 returns to dtr's central repository-install surface by adding Rust/Cargo
 installation:
@@ -27,7 +36,7 @@ selectors; the latter remains immediately discoverable to Cargo users.
 
 MVP02 delivers:
 
-- `dtr install --rust|--cargo <repospec>`.
+- ※ `dtr install --rust|--cargo <repospec>`.
 - Local repository mapping to `cargo install --path`.
 - Remote repository mapping to `cargo install --git`.
 - Explicit pass-through of native Cargo install arguments after `--`.
@@ -39,7 +48,7 @@ MVP02 delivers:
 MVP02 intentionally does not include:
 
 - Registry crate installation. Continue to run `cargo install <crate>`.
-- Repository inspection or automatic installer selection.
+- ※ Repository inspection or automatic installer selection.
 - Automatic package selection in a multi-package Git repository or workspace.
 - Dtr-owned Cargo feature, target, profile, root, binary, or revision options;
   native Cargo options are forwarded after `--`.
@@ -47,7 +56,7 @@ MVP02 intentionally does not include:
 - GitLab or generic-host account selection.
 - Persisting credentials or modifying Cargo, Git, or GitHub CLI configuration.
 
-## Usage as the functional requirements document
+## ※ Usage as the functional requirements document
 
 ```text
 dtr [--explain|-n] install|i <--rust|--cargo> <dtr-repospec>
@@ -80,7 +89,7 @@ The Rust and Go selectors are mutually exclusive. `--no-latest` remains a Go
 remote-install option and is rejected with `--rust` or `--cargo`. Cargo arguments
 are likewise rejected for `--go` in MVP02.
 
-## Repository mapping
+## ※ Repository mapping
 
 ### Local repository
 
@@ -130,7 +139,7 @@ home directory. An SCP-like path that already begins `/` remains absolute.
 Literal `scp://` and `sftp://` continue to produce the existing focused parked
 feature error.
 
-## Native Cargo arguments
+## ※ Native Cargo arguments
 
 Dtr does not duplicate Cargo's install option parser. Everything after the
 separator is appended to the resolved command in the original `OsString` form:
@@ -154,7 +163,7 @@ equals forms are covered:
 --index URL     --index=URL
 ```
 
-## GitHub account auto-switching
+## ※ GitHub account auto-switching
 
 Given:
 
@@ -201,7 +210,7 @@ used only for repositories the user is willing to build and execute.
 If a matching allowlisted token cannot be retrieved, dtr fails before starting
 Cargo. An unmatched owner retains normal Cargo authentication behavior.
 
-## Explain behavior
+## ※ Explain behavior
 
 The existing single-command `CommandPlan` remains sufficient. Auth material is
 attached as secret environment, while the rendered plan contains only:
@@ -214,7 +223,7 @@ attached as secret environment, while the rendered plan contains only:
 Explain may perform the read-only `gh auth token` lookup for a matched owner so
 the plan is executable, but it never starts Cargo.
 
-## Implementation structure
+## ※ Implementation structure
 
 MVP02 extends:
 
@@ -229,7 +238,7 @@ tests/cli.rs        PATH-isolated Cargo and secret-handling behavior
 No shell command string is constructed. Execution remains a direct
 `std::process::Command` invocation.
 
-## Testing strategy
+## ※ Testing strategy
 
 Unit tests cover:
 
@@ -268,7 +277,7 @@ git diff --check
 The suite runs on macOS and Linux. Live validation is explain-only and must not
 install a private repository or display credential material.
 
-## Implementation sequence
+## ※ Implementation sequence
 
 1. [x] Add the Rust selector, Cargo alias, and native-argument boundary.
 2. [x] Add Cargo-compatible repospec-to-source conversion.
@@ -279,7 +288,7 @@ install a private repository or display credential material.
 7. [x] Update README and validate live explain behavior.
 8. [x] Complete macOS/Linux gates, install, and milestone commit.
 
-## MVP02 acceptance criteria
+## ※ MVP02 acceptance criteria
 
 MVP02 is complete when:
 
@@ -297,7 +306,7 @@ MVP02 is complete when:
 - [x] No command is executed through a shell.
 - [x] All validation gates pass on macOS and Linux.
 
-## Validation record
+## ※ Validation record
 
 Completed on 2026-07-23:
 

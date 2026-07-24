@@ -50,7 +50,7 @@ pub(crate) struct InstallArgs {
     #[arg(long)]
     pub(crate) no_latest: bool,
 
-    /// Repository name, path, or remote
+    /// Repository name, path, or remote; remote Go sources may end in @<query>
     #[arg(value_name = "DTR_REPOSPEC")]
     pub(crate) repospec: OsString,
 

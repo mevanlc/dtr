@@ -799,6 +799,40 @@ command:  cargo install --git https://github.com/owner/tool.git\n"
 }
 
 #[test]
+fn auto_go_query_inspects_the_base_repository_and_preserves_the_query() {
+    let harness = Harness::new(&["gh", "go"]);
+    let output = harness
+        .command(&[
+            "--explain",
+            "install",
+            "https://github.com/yuser/reepo@some-go-stuff",
+        ])
+        .env(
+            "DTR_TEST_GITHUB_TREE_JSON",
+            r#"{"truncated":false,"tree":[{"path":"go.mod","type":"blob"}]}"#,
+        )
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "repospec: GitHub repository yuser/reepo\n\
+backend:  go\n\
+command:  go install github.com/yuser/reepo@some-go-stuff\n"
+    );
+    assert_eq!(
+        harness.invocation("gh-api-tree").args,
+        [
+            "api",
+            "repos/yuser/reepo/git/trees/HEAD",
+            "--hostname",
+            "github.com",
+        ]
+    );
+    assert!(!harness.was_invoked("go"));
+}
+
+#[test]
 fn auto_github_detection_reuses_process_scoped_account_selection() {
     let harness = Harness::new(&["gh", "cargo"]);
     assert!(
@@ -1757,6 +1791,10 @@ fn install_help_lists_the_tool_option_and_values() {
         "{help}"
     );
     assert!(help.contains("rust is an alias for cargo"), "{help}");
+    assert!(
+        help.contains("remote Go sources may end in @<query>"),
+        "{help}"
+    );
 }
 
 #[test]
@@ -1773,6 +1811,67 @@ fn go_remote_install_adds_latest_by_default() {
         harness.invocation("go").args,
         ["install", "github.com/hjr265/gittop@latest"]
     );
+}
+
+#[test]
+fn explicit_go_queries_support_url_shorthand_and_scp_like_repositories() {
+    let harness = Harness::new(&["go"]);
+    for (source, expected) in [
+        (
+            "https://github.com/yuser/reepo@some-go-stuff",
+            "github.com/yuser/reepo@some-go-stuff",
+        ),
+        (
+            "yuser/reepo@feature/branch",
+            "github.com/yuser/reepo@feature/branch",
+        ),
+        (
+            "git@example.com:owner/reepo.git@deadbeef",
+            "example.com/owner/reepo@deadbeef",
+        ),
+    ] {
+        let output = harness.run(&["install", "--tool", "go", source]);
+        assert!(output.status.success(), "{source}: {}", stderr(&output));
+        assert_eq!(harness.invocation("go").args, ["install", expected]);
+    }
+}
+
+#[test]
+fn go_queries_conflict_with_no_latest_and_non_go_backends() {
+    let go = Harness::new(&["go"]);
+    let output = go.run(&[
+        "install",
+        "--tool",
+        "go",
+        "--no-latest",
+        "owner/reepo@v1.2.3",
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("explicit Go version query conflicts with --no-latest"));
+    assert!(!go.was_invoked("go"));
+
+    let cargo = Harness::new(&["cargo"]);
+    let output = cargo.run(&["install", "--tool", "cargo", "reepo@v1.2.3"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("Go version query @v1.2.3 requires --tool go"));
+    assert!(!cargo.was_invoked("cargo"));
+
+    let auto = Harness::new(&["gh", "cargo"]);
+    let output = auto
+        .command(&["install", "owner/reepo@v1.2.3"])
+        .env(
+            "DTR_TEST_GITHUB_TREE_JSON",
+            r#"{"truncated":false,"tree":[{"path":"Cargo.toml","type":"blob"}]}"#,
+        )
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("but cargo was selected"));
+    assert_eq!(
+        auto.invocation("gh-api-tree").args[1],
+        "repos/owner/reepo/git/trees/HEAD"
+    );
+    assert!(!auto.was_invoked("cargo"));
 }
 
 #[test]

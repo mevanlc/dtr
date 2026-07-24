@@ -4,6 +4,15 @@ Status: implemented and validated on macOS and Linux (2026-07-23)
 
 Roadmap: [dtr first MVP](FIRST-MVP.md), phase 2 of 5
 
+※ Historical note: this document records the interface and scope delivered by
+MVP01. Statements that repository inspection or installer backends were parked
+describe that phase, not current behavior. The current install interface and
+the completed automatic-selection increment are documented in
+[PLAN-AUTO-INSTALL.md](PLAN-AUTO-INSTALL.md).
+
+A marked statement or section contains interface or roadmap status that has
+since been superseded.
+
 ## Product increment
 
 MVP01 teaches `dtr clone` to choose the right authenticated GitHub account when
@@ -47,7 +56,7 @@ MVP01 intentionally does not include:
 - GitLab account switching.
 - Automatic account selection for bare repository names, which contain no owner
   signal and continue to use GitHub CLI's active account.
-- Other items parked by MVP00, including additional installer backends,
+- ※ Other items parked by MVP00, including additional installer backends,
   automatic installer detection, and `scp://` / `sftp://` staging.
 
 ## Usage as the functional requirements document
@@ -266,7 +275,7 @@ MVP01 is complete when:
 - [x] The final operation is still executed without a shell.
 - [x] All validation gates pass on macOS and Linux.
 
-### Validation record
+### ※ Validation record
 
 - macOS: formatting, Clippy with warnings denied, `cargo check`, and all 61 tests
   through nextest pass with the locked dependency graph.

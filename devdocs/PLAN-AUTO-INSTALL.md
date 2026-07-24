@@ -1,0 +1,170 @@
+# dtr automatic install tool selection plan
+
+Status: implemented and validated on macOS (2026-07-23)
+
+Roadmap: completed post-[first MVP](FIRST-MVP.md) increment
+
+This document records the current install interface and supersedes the explicit
+selector spellings in the historical `PLAN-MVP00.md` through `PLAN-MVP04.md`
+phase records. It does not change what those phases delivered at their original
+completion points. Those records use `※` to mark statements and sections whose
+interface or roadmap status this increment superseded.
+
+## Product increment
+
+Repository installation now uses one tool-valued option:
+
+```text
+dtr [--explain|-n] install|i [-t|--tool <tool>] <dtr-repospec>
+dtr [--explain|-n] install|i [-t|--tool <tool>] <dtr-repospec> -- <installer-arg>...
+```
+
+The supported values are `go`, `cargo`, `uv`, `pipx`, `npm`, and `auto`.
+`rust` is accepted as an alias for the preferred `cargo` value. `auto` is the
+default when `--tool` is omitted. The former `--go`, `--rust`, `--cargo`,
+`--uv`, `--pipx`, and `--npm` selector flags are no longer accepted.
+
+An explicit non-auto tool preserves the established backend mappings and skips
+repository inspection. Native installer arguments retain the existing `--`
+boundary and backend-specific safety checks.
+
+Remote install sources may carry an install-only Go version query suffix, such
+as `owner/repo@v1.2.3` or
+`https://github.com/owner/repo@feature-branch`. Dtr separates the query from the
+base `RepoSpec`; clone parsing and explicit local paths retain their existing
+meaning.
+
+## Conservative automatic selection
+
+Auto mode considers exact, file-like names in the repository root:
+
+| Root manifest | Ecosystem | Selected tool |
+|---|---|---|
+| `go.mod` | Go | `go` |
+| `Cargo.toml` | Rust | `cargo` |
+| `pyproject.toml`, `setup.py`, or `setup.cfg` | Python | `uv` if available, otherwise `pipx` |
+| `package.json` | JavaScript | `npm` |
+
+Names are case-sensitive. A directory with a manifest-like name is not
+evidence. Lockfiles, tool configuration, nested manifests, and other inferred
+signals are deliberately ignored.
+
+Exactly one ecosystem must be recognized. If no ecosystem or multiple
+ecosystems are present, dtr declines to install and suggests an explicit
+`--tool <go|cargo|uv|pipx|npm>` choice. A Python repository also declines when
+neither uv nor pipx is available.
+
+There is no ecosystem priority order. Refusing mixed evidence prevents an
+arbitrary backend choice in polyglot repositories and monorepos.
+
+## Go version queries
+
+The suffix after `@` is passed to Go as its native version query. Go owns the
+meaning and validation of versions, version prefixes, branches, tags, revisions,
+and special queries. Without an explicit query, dtr retains its `@latest`
+default or omits the suffix when `--no-latest` is present.
+
+The query is removed before auto inspection, which continues to inspect the
+base repository's default branch. A query does not count as Go ecosystem
+evidence. If auto selects another backend, or the user explicitly selects a
+non-Go backend, dtr rejects the query before invoking that tool. An explicit
+query also conflicts with `--no-latest`.
+
+Query extraction applies to URL, forge shorthand, bare GitHub, generic Git, and
+SCP-like remote forms. It does not reinterpret `@` in an explicit local path or
+the username portion of an SSH remote.
+
+## Root inspection
+
+Local repositories are inspected with a direct root-directory listing. Remote
+inspection uses the lightest supported mechanism for the repospec:
+
+1. A recognized GitHub repository uses `gh api` to request the default branch's
+   root tree. Process-scoped GitHub account selection is resolved before the
+   request and retained for backend planning without a second account lookup.
+2. A recognized GitLab repository uses `glab api` to list the default branch's
+   root tree, including paginated responses.
+3. If a forge API is unavailable, fails, returns malformed data, or reports a
+   truncated tree, dtr falls back to Git.
+4. Other remote Git repospecs go directly to the Git inspection path.
+
+The Git path creates a temporary filtered, depth-one, single-branch clone with
+no checkout, then reads the root tree from `HEAD`. It does not fall back to an
+ordinary full checkout or repository-history clone. Temporary inspection state
+is removed when discovery finishes.
+
+If every applicable inspection path fails, dtr reports the discovery failures
+and suggests the explicit tool values instead of guessing.
+
+## Explain and authentication behavior
+
+`--explain` still performs the read-only discovery needed to choose a backend,
+but does not execute the final installer. Its output retains the existing plan
+shape and names only the selected backend and final command; discovery commands
+are not rendered as additional operations.
+
+For an allowlisted explicit GitHub owner, the same process-scoped token
+selection is used by GitHub API inspection, filtered Git fallback, and final
+Cargo, uv, pipx, or npm Git fetching. Go retains its established import-path
+installation behavior and receives no dtr-managed Git authentication. No active
+GitHub CLI account or persistent Git configuration is changed, and token-derived
+values remain absent from explain output and diagnostics.
+
+## Implementation map
+
+```text
+src/cli.rs             InstallTool values, default, alias, and argument shape
+src/install_detect.rs  marker inference and local/API/Git root inspection
+src/resolve.rs         one-time repospec/auth resolution and backend dispatch
+src/repospec.rs        inspection-safe remote normalization
+src/github_auth.rs     reusable process-scoped Git environment
+src/command.rs         shared child-environment application
+tests/cli.rs           PATH-isolated end-to-end detection and fallback coverage
+```
+
+`serde_json` parses forge responses. Repository names and Git tree entries
+remain byte-safe where the underlying platform permits non-UTF-8 paths.
+
+## Completed implementation checklist
+
+1. [x] Replace backend selector flags with `-t` / `--tool` and default `auto`.
+2. [x] Prefer `cargo` while accepting `rust` as a value alias.
+3. [x] Infer one ecosystem from exact root manifests and decline ambiguity.
+4. [x] Select uv or pipx from installed Python tooling.
+5. [x] Inspect local roots without cloning.
+6. [x] Inspect GitHub and GitLab roots through their forge APIs.
+7. [x] Fall back to filtered, depth-one Git inspection without checkout.
+8. [x] Reuse process-scoped GitHub auth across discovery and installation.
+9. [x] Keep explicit tool selection inspection-free.
+10. [x] Add focused unit, PATH-isolated integration, help, and error coverage.
+11. [x] Update the README and roadmap documentation.
+12. [x] Add `just check` as the complete local validation entry point.
+13. [x] Add install-only Go version queries without changing clone semantics.
+
+## Validation record
+
+Validated on macOS on 2026-07-23:
+
+- `just check` passed formatting, warnings-as-errors Clippy, locked nextest,
+  locked `cargo check`, `actionlint`, and `git diff --check`.
+- All 129 tests passed through nextest.
+- Live read-only local inspection selected Cargo for this repository.
+- Live read-only GitHub inspection selected Go for `cli/cli@latest` and retained
+  the query in the final command.
+- The requested `yuser/reepo@some-go-stuff` example produced the exact Go query
+  command under explicit read-only selection.
+
+The GitHub Actions workflow continues to run the Rust validation gates on both
+macOS and Linux. Linux validation for this post-MVP increment is not claimed in
+this local record until that workflow runs successfully.
+
+## Remaining boundaries
+
+- Automatic package, binary, workspace, or subdirectory selection in monorepos.
+- Go module paths that differ from their repository path.
+- Literal `scp://` and `sftp://` staging workflows.
+- Configurable shorthand forge, host, source, protocol, or account defaults.
+- GitHub Enterprise, GitLab, and generic-host account selection.
+- Persistent checkout-to-account binding for later fetch and push operations.
+- Windows support.
+- JSON output, plugins, `doctor`, update, and uninstall orchestration.
