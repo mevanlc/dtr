@@ -224,8 +224,9 @@ impl GitOptionTable {
         }
 
         if argument.starts_with('-') && !argument.starts_with("--") && argument.len() > 2 {
-            let short = &argument[..2];
-            if self.arity.get(short) == Some(&true) {
+            if let Some(short) = argument.get(..2)
+                && self.arity.get(short) == Some(&true)
+            {
                 output.push(argv[index].clone());
                 return Ok(1);
             }

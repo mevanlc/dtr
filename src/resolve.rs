@@ -610,6 +610,9 @@ fn git_clone_plan(
 ) -> CommandPlan {
     let mut args = vec![OsString::from("clone")];
     args.extend(git_options);
+    // Terminate options with `--` so a dash-leading remote or destination
+    // (e.g. an scp-like `-x:y` repospec) can never be parsed by git as a flag.
+    args.push(OsString::from("--"));
     args.push(remote);
     if pass_target {
         args.push(target_dir.as_os_str().to_os_string());
@@ -827,6 +830,9 @@ mod tests {
             Vec::new(),
             "local repository".to_owned(),
         );
-        assert_eq!(plan.args[1], remote);
+        assert_eq!(
+            plan.args,
+            [OsString::from("clone"), OsString::from("--"), remote]
+        );
     }
 }

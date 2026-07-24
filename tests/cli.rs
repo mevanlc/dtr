@@ -634,7 +634,7 @@ fn auto_switch_configuration_does_not_remove_missing_gh_fallback() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         harness.invocation("git").args,
-        ["clone", "https://github.com/mevanlc/foo.git"]
+        ["clone", "--", "https://github.com/mevanlc/foo.git"]
     );
     assert!(!harness.was_invoked("gh-auth-token"));
 }
@@ -662,7 +662,7 @@ fn github_clone_falls_back_to_git_when_gh_is_absent() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         harness.invocation("git").args,
-        ["clone", "https://github.com/owner/repo.git"]
+        ["clone", "--", "https://github.com/owner/repo.git"]
     );
 }
 
@@ -682,7 +682,7 @@ fn local_and_generic_repositories_go_directly_to_git() {
         assert!(output.status.success(), "{}", stderr(&output));
         assert_eq!(
             harness.invocation("git").args,
-            ["clone", repository, "destination"]
+            ["clone", "--", repository, "destination"]
         );
         assert!(!harness.was_invoked("gh"));
         assert!(!harness.was_invoked("glab"));
@@ -710,7 +710,35 @@ fn gitlab_clone_falls_back_to_git_when_glab_is_absent() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         harness.invocation("git").args,
-        ["clone", "https://gitlab.com/group/repo.git"]
+        ["clone", "--", "https://gitlab.com/group/repo.git"]
+    );
+}
+
+#[test]
+fn dash_leading_scp_remote_is_forced_after_option_terminator_for_git() {
+    // Regression (F2): a dash-leading scp-like repospec must reach git after a
+    // `--` option terminator, never in git's option position. Two `--` are
+    // needed at the shell: clap (trailing_var_arg) consumes the first, and
+    // parse_clone_args consumes the second to mark `-x:y` as a positional.
+    let harness = Harness::new(&["git"]);
+    let output = harness.run(&["clone", "--", "--", "-x:y"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let clone = harness.invocation("git");
+    assert_eq!(&clone.args[..3], ["clone", "--", "-x:y"]);
+}
+
+#[test]
+fn clone_multibyte_short_option_errors_cleanly_without_panicking() {
+    // Regression (F1): `-é` has a multi-byte second codepoint; classifying it as
+    // a short option must not slice inside the codepoint and panic. A clean
+    // exit code 2 (not a 101 panic) is the signal the fix holds.
+    let harness = Harness::new(&["git"]);
+    let output = harness.run(&["clone", "-é"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("unknown option"),
+        "{}",
+        stderr(&output)
     );
 }
 
