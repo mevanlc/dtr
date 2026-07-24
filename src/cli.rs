@@ -21,7 +21,7 @@ pub(crate) struct Cli {
 #[derive(Debug, Subcommand)]
 pub(crate) enum DtrCommand {
     /// Clone a local or remote repository
-    #[command(disable_help_flag = true)]
+    #[command(disable_help_flag = true, visible_alias = "c")]
     Clone(CloneArgs),
 
     /// Install tools from a repository
