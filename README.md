@@ -130,7 +130,13 @@ select automatically:
 
 ```sh
 dtr config set github.auth.auto_switch mevanlc,mike-clark-8192
+dtr config list
+dtr config list --name-only
 ```
+
+`dtr config list` prints configured `key=value` entries. `--name-only` omits
+their values. An empty configuration produces no list output; all available
+keys remain documented in `dtr config --help`.
 
 When the explicit owner in `owner/repo` or a GitHub URL matches an account in
 that allowlist, dtr obtains that account's stored token from `gh` and supplies

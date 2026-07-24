@@ -11,6 +11,7 @@ use crate::cli::{ConfigArgs, ConfigCommand};
 use crate::error::DtrError;
 
 pub(crate) const GITHUB_AUTO_SWITCH_KEY: &str = "github.auth.auto_switch";
+pub(crate) const CONFIG_KEYS: &[&str] = &[GITHUB_AUTO_SWITCH_KEY];
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -173,6 +174,16 @@ impl Config {
 
 pub(crate) fn run(args: ConfigArgs) -> Result<i32, DtrError> {
     match args.command {
+        ConfigCommand::List(args) => {
+            let config = Config::load()?;
+            if let Some(accounts) = config.auto_switch_accounts() {
+                if args.name_only {
+                    println!("{GITHUB_AUTO_SWITCH_KEY}");
+                } else {
+                    println!("{GITHUB_AUTO_SWITCH_KEY}={}", accounts.join(","));
+                }
+            }
+        }
         ConfigCommand::Set(args) => {
             require_known_key(&args.key)?;
             let accounts = parse_auto_switch_accounts(&args.value)?;
@@ -205,11 +216,12 @@ pub(crate) fn run(args: ConfigArgs) -> Result<i32, DtrError> {
 }
 
 fn require_known_key(key: &str) -> Result<(), DtrError> {
-    if key == GITHUB_AUTO_SWITCH_KEY {
+    if CONFIG_KEYS.contains(&key) {
         Ok(())
     } else {
         Err(DtrError::new(format!(
-            "unknown configuration key {key:?}; MVP01 supports only {GITHUB_AUTO_SWITCH_KEY}"
+            "unknown configuration key {key:?}; available keys: {}",
+            CONFIG_KEYS.join(", ")
         )))
     }
 }

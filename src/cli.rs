@@ -29,6 +29,9 @@ pub(crate) enum DtrCommand {
     Install(InstallArgs),
 
     /// Read or change dtr configuration
+    #[command(
+        long_about = "Read or change dtr configuration.\n\nAvailable configuration keys:\n  github.auth.auto_switch\n      Comma-separated GitHub CLI account names eligible for process-scoped\n      authentication when an explicit repository owner matches."
+    )]
     Config(ConfigArgs),
 }
 
@@ -91,6 +94,9 @@ pub(crate) struct ConfigArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ConfigCommand {
+    /// List configured values
+    List(ConfigListArgs),
+
     /// Set a configuration value
     Set(ConfigSetArgs),
 
@@ -99,6 +105,13 @@ pub(crate) enum ConfigCommand {
 
     /// Remove a configuration value
     Unset(ConfigKeyArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ConfigListArgs {
+    /// Show configured key names without values
+    #[arg(long)]
+    pub(crate) name_only: bool,
 }
 
 #[derive(Debug, Args)]
@@ -122,6 +135,7 @@ pub(crate) struct ConfigKeyArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
 
     #[test]
     fn explain_is_a_pre_command_option() {
@@ -290,5 +304,17 @@ mod tests {
         ])
         .expect("valid command");
         assert!(matches!(cli.command, DtrCommand::Config(_)));
+    }
+
+    #[test]
+    fn config_long_help_lists_every_known_key() {
+        let mut command = Cli::command();
+        let config = command
+            .find_subcommand_mut("config")
+            .expect("config subcommand");
+        let help = config.render_long_help().to_string();
+        for key in crate::config::CONFIG_KEYS {
+            assert!(help.contains(key), "missing {key:?} from config long help");
+        }
     }
 }

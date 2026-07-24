@@ -147,7 +147,7 @@ Validated on macOS on 2026-07-23:
 
 - `just check` passed formatting, warnings-as-errors Clippy, locked nextest,
   locked `cargo check`, `actionlint`, and `git diff --check`.
-- All 129 tests passed through nextest.
+- All 132 tests passed through nextest.
 - Live read-only local inspection selected Cargo for this repository.
 - Live read-only GitHub inspection selected Go for `cli/cli@latest` and retained
   the query in the final command.

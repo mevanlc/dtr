@@ -344,13 +344,68 @@ fn config_rejects_unknown_keys_and_invalid_account_lists() {
     let harness = Harness::new(&[]);
     let unknown = harness.run(&["config", "set", "github.auth.surprise", "mevanlc"]);
     assert_eq!(unknown.status.code(), Some(2));
-    assert!(stderr(&unknown).contains("unknown configuration key"));
+    let error = stderr(&unknown);
+    assert!(error.contains("unknown configuration key"));
+    assert!(error.contains("available keys: github.auth.auto_switch"));
 
     for value in ["", "mevanlc,", "not an account"] {
         let output = harness.run(&["config", "set", "github.auth.auto_switch", value]);
         assert_eq!(output.status.code(), Some(2), "{value:?}");
     }
     assert!(!harness.config_file().exists());
+}
+
+#[test]
+fn config_long_help_documents_available_keys() {
+    let harness = Harness::new(&[]);
+    let long = harness.run(&["config", "--help"]);
+    assert!(long.status.success(), "{}", stderr(&long));
+    let long_help = stdout(&long);
+    assert!(
+        long_help.contains("Available configuration keys:"),
+        "{long_help}"
+    );
+    assert!(long_help.contains("github.auth.auto_switch"), "{long_help}");
+    assert!(
+        long_help.contains("Comma-separated GitHub CLI account names"),
+        "{long_help}"
+    );
+    assert!(long_help.contains("list   List configured values"));
+
+    let short = harness.run(&["config", "-h"]);
+    assert!(short.status.success(), "{}", stderr(&short));
+    assert!(
+        !stdout(&short).contains("Available configuration keys:"),
+        "short help should remain compact"
+    );
+}
+
+#[test]
+fn config_list_prints_configured_values_or_names() {
+    let harness = Harness::new(&[]);
+    let empty = harness.run(&["config", "list"]);
+    assert!(empty.status.success(), "{}", stderr(&empty));
+    assert_eq!(stdout(&empty), "");
+    assert!(!harness.config_file().exists());
+
+    let set = harness.run(&[
+        "config",
+        "set",
+        "github.auth.auto_switch",
+        "mevanlc,mike-clark-8192",
+    ]);
+    assert!(set.status.success(), "{}", stderr(&set));
+
+    let values = harness.run(&["config", "list"]);
+    assert!(values.status.success(), "{}", stderr(&values));
+    assert_eq!(
+        stdout(&values),
+        "github.auth.auto_switch=mevanlc,mike-clark-8192\n"
+    );
+
+    let names = harness.run(&["config", "list", "--name-only"]);
+    assert!(names.status.success(), "{}", stderr(&names));
+    assert_eq!(stdout(&names), "github.auth.auto_switch\n");
 }
 
 #[test]
