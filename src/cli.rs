@@ -6,7 +6,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[command(
     name = "dtr",
     version,
-    about = "Do/develop the right repo",
+    about = "Do The Repo repo",
     long_about = "Resolve the repository reference you already have and invoke the right underlying tool."
 )]
 pub(crate) struct Cli {

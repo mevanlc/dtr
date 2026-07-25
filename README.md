@@ -1,6 +1,6 @@
 # dtr
 
-`dtr` means **do/develop the right repo**.
+`dtr` means **Do The Repo repo**.
 
 It accepts the repository reference you already have, resolves what it means,
 and invokes the appropriate underlying tool. It supports forge-aware cloning,

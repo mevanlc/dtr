@@ -2,7 +2,7 @@
 name = "dtr"
 version = "0.1.0"
 edition = "2024"
-description = "Do/develop the right repo"
+description = "Do The Repo repo"
 
 [dependencies]
 base64 = "0.23"
