@@ -644,14 +644,14 @@ fn is_explicit_relative(value: &OsStr) -> bool {
     use std::os::unix::ffi::OsStrExt;
 
     let bytes = value.as_bytes();
-    bytes.starts_with(b"./") || bytes.starts_with(b"../")
+    bytes == b"." || bytes == b".." || bytes.starts_with(b"./") || bytes.starts_with(b"../")
 }
 
 #[cfg(not(unix))]
 fn is_explicit_relative(value: &OsStr) -> bool {
-    value
-        .to_str()
-        .is_some_and(|text| text.starts_with("./") || text.starts_with("../"))
+    value.to_str().is_some_and(|text| {
+        text == "." || text == ".." || text.starts_with("./") || text.starts_with("../")
+    })
 }
 
 fn display_os(value: &OsStr) -> String {
@@ -682,6 +682,31 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn classifies_bare_dot_and_dot_dot_as_local() {
+        assert_eq!(
+            parse("."),
+            RepoSpec::Local {
+                path: PathBuf::from(".")
+            }
+        );
+        assert_eq!(
+            parse(".."),
+            RepoSpec::Local {
+                path: PathBuf::from("..")
+            }
+        );
+
+        let install = parse_install(".");
+        assert!(matches!(install.spec, RepoSpec::Local { .. }));
+        assert_eq!(install.go_query, None);
+
+        // Only the reserved names are special; dot-prefixed repository names
+        // such as `.github` remain valid GitHub references.
+        assert!(matches!(parse(".github"), RepoSpec::GithubMine { .. }));
+        assert!(matches!(parse("owner/.github"), RepoSpec::Forge { .. }));
     }
 
     #[test]

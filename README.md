@@ -83,7 +83,7 @@ Repository references are classified in a stable order:
 |---|---|
 | `repo` | your GitHub repository named `repo` |
 | `owner/repo` | `github.com/owner/repo` |
-| `/path`, `./path`, `../path` | local Git repository |
+| `.`, `..`, `/path`, `./path`, `../path` | local Git repository |
 | `https://github.com/owner/repo` | GitHub repository |
 | `git@github.com:owner/repo`, `ssh://git@github.com/owner/repo` | GitHub repository over SSH |
 | `https://gitlab.com/group/repo` | GitLab repository |
@@ -91,8 +91,9 @@ Repository references are classified in a stable order:
 | `git@example.com:path/repo.git` | generic SCP-like Git remote |
 
 An explicit `./` or `../` is therefore meaningful: `owner/repo` is GitHub,
-while `./owner/repo` is a local path. Classification does not change based on
-what happens to exist in the current directory.
+while `./owner/repo` is a local path. Bare `.` and `..` are local paths: GitHub
+reserves both, so they can never name a repository. Classification does not
+change based on what happens to exist in the current directory.
 
 An optional `#fragment` is stripped from a recognized GitHub or GitLab
 repository-root reference before cloning or installation. Browser subpages and
