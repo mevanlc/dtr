@@ -85,6 +85,7 @@ Repository references are classified in a stable order:
 | `owner/repo` | `github.com/owner/repo` |
 | `/path`, `./path`, `../path` | local Git repository |
 | `https://github.com/owner/repo` | GitHub repository |
+| `git@github.com:owner/repo`, `ssh://git@github.com/owner/repo` | GitHub repository over SSH |
 | `https://gitlab.com/group/repo` | GitLab repository |
 | another HTTP(S), SSH, or Git URL | generic Git remote |
 | `git@example.com:path/repo.git` | generic SCP-like Git remote |
@@ -92,6 +93,11 @@ Repository references are classified in a stable order:
 An explicit `./` or `../` is therefore meaningful: `owner/repo` is GitHub,
 while `./owner/repo` is a local path. Classification does not change based on
 what happens to exist in the current directory.
+
+An optional `#fragment` is stripped from a recognized GitHub or GitLab
+repository-root reference before cloning or installation. Browser subpages and
+query strings remain errors rather than being guessed at. Fragments on generic
+Git remotes are preserved.
 
 ### Clone directory modes
 
@@ -123,6 +129,11 @@ dtr clone -vq owner/repo
 options consume values. When `gh` or `glab` is selected, those options are
 placed after the forge CLI's `--` separator.
 
+For a recognized GitHub repository, `-U NAME` and
+`--upstream-remote-name NAME` set the upstream remote name when cloning a fork.
+They are forwarded to `gh` as `--upstream-remote-name`; requesting either form
+requires `gh` rather than silently falling back to Git.
+
 ### GitHub account auto-switching
 
 If you use multiple accounts on `github.com`, configure the accounts dtr may
@@ -138,11 +149,12 @@ dtr config list --name-only
 their values. An empty configuration produces no list output; all available
 keys remain documented in `dtr config --help`.
 
-When the explicit owner in `owner/repo` or a GitHub URL matches an account in
-that allowlist, dtr obtains that account's stored token from `gh` and supplies
-process-scoped authentication only to the clone or remote-install child. It does
-not run `gh auth switch` or change the active GitHub CLI account. The operation
-uses HTTPS because selecting a token does not select an SSH key.
+When the explicit owner in `owner/repo` or a recognized GitHub HTTP(S) or SSH
+reference matches an account in that allowlist, dtr obtains that account's
+stored token from `gh` and supplies process-scoped authentication only to the
+clone or remote-install child. It does not run `gh auth switch` or change the
+active GitHub CLI account. The operation uses HTTPS because selecting a token
+does not select an SSH key.
 
 GitHub-aware clones receive the token through `GH_TOKEN`. Cargo, Python, and npm
 remote installs use the Git CLI and process-scoped Git configuration containing
@@ -216,8 +228,9 @@ remotes, API failures, and truncated API results fall back to a temporary
 depth-one, single-branch Git clone with no tags, no checkout, and a
 `blob:none` filter. Dtr reads the root tree and removes the temporary repository;
 it does not deliberately fall back to a working checkout or full history.
-Inspection always uses the remote default branch. A generic SSH or SCP-like
-repospec remains generic even when its hostname is a well-known forge.
+Inspection always uses the remote default branch. Except for the exact GitHub
+SSH forms documented above, an SSH or SCP-like repospec remains generic even
+when its hostname is a well-known forge.
 
 Explicit `--tool` selection skips repository inspection entirely. This is the
 escape hatch for mixed-language repositories, nested packages, inaccessible
@@ -349,7 +362,7 @@ the resolved clone/install operation or creates its planned target directories.
 
 - Well-known forge handling covers `github.com` and `gitlab.com`.
 - Forge browser-page URLs such as `/tree/` and `/-/blob/` are rejected rather
-  than guessed at.
+  than guessed at; fragments on repository-root references are stripped.
 - Literal `scp://` and `sftp://` staging is parked for a later milestone.
 - Go module paths that differ from their repository paths, automatic package or
   workspace selection in monorepos, GitLab/Enterprise account selection, and

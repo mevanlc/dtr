@@ -21,6 +21,21 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
         ));
     }
 
+    if request.upstream_remote_name.is_some()
+        && !matches!(
+            &request.spec,
+            RepoSpec::GithubMine { .. }
+                | RepoSpec::Forge {
+                    forge: Forge::GitHub,
+                    ..
+                }
+        )
+    {
+        return Err(DtrError::new(
+            "-U/--upstream-remote-name applies only to recognized GitHub repositories",
+        ));
+    }
+
     let (target_dir, pass_target, preparations) = clone_target(&request)?;
     let repospec = request.spec.description();
 
@@ -30,6 +45,7 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
             Ok(forge_clone_plan(
                 "gh",
                 repo.clone().into(),
+                request.upstream_remote_name,
                 request.git_options,
                 target_dir,
                 pass_target,
@@ -77,6 +93,7 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
                 Ok(forge_clone_plan(
                     preferred,
                     repository,
+                    request.upstream_remote_name,
                     request.git_options,
                     target_dir,
                     pass_target,
@@ -87,6 +104,9 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
                     removed_environment,
                 ))
             } else {
+                if request.upstream_remote_name.is_some() {
+                    require_command("gh", "using -U/--upstream-remote-name")?;
+                }
                 require_command("git", "cloning a repository")?;
                 let remote = request.spec.git_remote()?;
                 Ok(git_clone_plan(
@@ -568,6 +588,7 @@ fn clone_target(request: &CloneRequest) -> Result<(PathBuf, bool, Vec<PathBuf>),
 fn forge_clone_plan(
     program: &'static str,
     repository: OsString,
+    upstream_remote_name: Option<OsString>,
     git_options: Vec<OsString>,
     target_dir: PathBuf,
     pass_target: bool,
@@ -578,6 +599,10 @@ fn forge_clone_plan(
     removed_environment: Vec<OsString>,
 ) -> CommandPlan {
     let mut args = ["repo", "clone"].map(OsString::from).to_vec();
+    if let Some(name) = upstream_remote_name {
+        args.push("--upstream-remote-name".into());
+        args.push(name);
+    }
     args.push(repository);
     if pass_target {
         args.push(target_dir.as_os_str().to_os_string());
@@ -684,12 +709,14 @@ mod tests {
             directory: None,
             git_options: Vec::new(),
             name_mode: NameMode::NameOwner,
+            upstream_remote_name: None,
         };
         let owner_dir = CloneRequest {
             spec,
             directory: None,
             git_options: Vec::new(),
             name_mode: NameMode::OwnerDirectory,
+            upstream_remote_name: None,
         };
         assert_eq!(
             clone_target(&name_owner).unwrap().0,
@@ -708,6 +735,7 @@ mod tests {
             directory: None,
             git_options: Vec::new(),
             name_mode: NameMode::NameOwner,
+            upstream_remote_name: None,
         };
         assert_eq!(
             clone_target(&request).unwrap().0,
@@ -722,6 +750,7 @@ mod tests {
             directory: Some("chosen".into()),
             git_options: Vec::new(),
             name_mode: NameMode::OwnerDirectory,
+            upstream_remote_name: None,
         };
         let (target, pass, preparations) = clone_target(&request).unwrap();
         assert_eq!(target, PathBuf::from("chosen"));

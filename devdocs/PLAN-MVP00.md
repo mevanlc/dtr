@@ -117,10 +117,15 @@ Pass generic Git transports to `git clone`. An SCP-like Git remote such as
 `git@example.com:owner/repo.git` is supported; literal `scp://` and `sftp://`
 inputs are not part of MVP00.
 
-Only exact repository-root forge URLs are accepted as forge references.
-Browser page URLs containing `/tree/`, `/blob/`, query strings, or fragments
-produce a focused error instead of silently cloning or installing a different
-repository than the user intended.
+※ After MVP00, the `git@github.com:owner/repo` and
+`ssh://git@github.com/owner/repo` forms became recognized GitHub references;
+other SSH and SCP-like inputs retain the generic behavior above.
+
+Only exact repository-root forge URLs are accepted as forge references. Browser
+page URLs containing `/tree/` or `/blob/`, and query strings, produce a focused
+error instead of silently cloning or installing a different repository than the
+user intended. ※ MVP00 also rejected fragments; current behavior strips an
+optional fragment from a recognized repository-root forge reference.
 
 ### Clone options
 
@@ -136,6 +141,9 @@ For GitHub, they preserve the existing `gcl` meanings exactly:
 
 - `-O` maps `owner/repo` to `owner--repo`.
 - `-D` maps `owner/repo` to `owner/repo` and creates the parent directory.
+
+※ After MVP00, `-U` / `--upstream-remote-name` was added for forwarding the
+upstream remote name to `gh repo clone`.
 
 For a nested GitLab namespace, each namespace separator becomes `--` under
 `-O`, while `-D` retains the namespace directory structure. An explicit `[dir]`
@@ -274,6 +282,10 @@ select the documented fallback, but a forge CLI that starts and fails returns
 its own failure; dtr does not retry through another transport and mask the
 reason.
 
+※ Recognized GitHub SSH forms were added after MVP00. Their Git fallback
+preserves the supplied SSH transport. `-U` / `--upstream-remote-name` requires
+`gh`, so that option never falls back to Git.
+
 GitHub CLI accepts a bare repository name as the authenticated user's repo, and
 both GitHub CLI and GitLab CLI accept Git options after `--`. The adapters
 should preserve those native behaviors rather than reimplement authentication
@@ -369,7 +381,8 @@ Use table-driven tests for:
 
 - Every repospec example and every parser-precedence boundary.
 - `.git` and trailing-slash normalization.
-- Rejection of forge browser-page URLs, queries, and fragments.
+- ※ Rejection of forge browser-page URLs and queries; current behavior strips
+  fragments from recognized repository-root forge references.
 - GitHub and nested GitLab target derivation under default, `-O`, and `-D`.
 - Go import-path derivation, default `@latest`, and `--no-latest`.
 - Shell-safe explain rendering.

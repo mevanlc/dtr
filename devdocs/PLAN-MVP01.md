@@ -41,6 +41,7 @@ MVP01 delivers:
 - A configuration file and `config set`, `config get`, and `config unset`.
 - The `github.auth.auto_switch` account allowlist.
 - Owner-to-account matching for GitHub shorthand and GitHub URL clones.
+  ※ Recognized GitHub SSH forms gained the same matching behavior after MVP01.
 - Process-scoped GitHub token selection for an eligible clone.
 - Auth decisions in `--explain` output without displaying credentials.
 - Deterministic, PATH-isolated tests for configuration and account selection.
@@ -226,6 +227,7 @@ PATH-isolated integration tests cover:
 - `config set`, `get`, and idempotent `unset` using `DTR_CONFIG_DIR`.
 - A matching owner receiving the requested account token in the clone child.
 - A matching GitHub URL receiving the same behavior.
+  ※ Current coverage also includes recognized GitHub SSH forms.
 - An unmatched owner and a bare repository retaining active-account behavior.
 - A matching configured account whose token lookup fails, with no clone started.
 - Parent `GH_TOKEN` / `GITHUB_TOKEN` values not affecting stored-account lookup.

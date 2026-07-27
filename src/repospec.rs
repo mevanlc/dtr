@@ -101,6 +101,10 @@ impl RepoSpec {
             return Self::parse_url(text, value);
         }
 
+        if let Some(spec) = parse_github_scp_like(text)? {
+            return Ok(spec);
+        }
+
         if let Some((host, path)) = parse_scp_like(text) {
             return Ok(Self::ScpLike {
                 remote: value.to_os_string(),
@@ -109,7 +113,8 @@ impl RepoSpec {
             });
         }
 
-        let parts = text.split('/').collect::<Vec<_>>();
+        let forge_shorthand = text.split_once('#').map_or(text, |(base, _)| base);
+        let parts = forge_shorthand.split('/').collect::<Vec<_>>();
         if parts.len() == 2 && parts.iter().all(|part| valid_github_component(part)) {
             let repo = strip_dot_git(parts[1]);
             if repo.is_empty() {
@@ -147,37 +152,51 @@ impl RepoSpec {
             .ok_or_else(|| DtrError::new("repository URL is missing a hostname"))?
             .to_ascii_lowercase();
 
-        if matches!(url.scheme(), "http" | "https")
-            && url.port().is_none()
-            && matches!(host.as_str(), "github.com" | "gitlab.com")
-        {
-            if url.query().is_some() || url.fragment().is_some() {
+        let forge = if url.port().is_none() {
+            match (url.scheme(), host.as_str()) {
+                ("http" | "https", "github.com") => Some(Forge::GitHub),
+                ("http" | "https", "gitlab.com") => Some(Forge::GitLab),
+                ("ssh", "github.com") if url.username() == "git" => Some(Forge::GitHub),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        if let Some(forge) = forge {
+            if url.query().is_some() {
                 return Err(DtrError::new(
-                    "forge repository URLs must not contain a query string or fragment",
+                    "forge repository URLs must not contain a query string",
                 ));
             }
-            if !url.username().is_empty() || url.password().is_some() {
-                return Err(DtrError::new(
-                    "forge repository URLs must not contain embedded credentials",
-                ));
+            match url.scheme() {
+                "http" | "https" if !url.username().is_empty() || url.password().is_some() => {
+                    return Err(DtrError::new(
+                        "forge repository URLs must not contain embedded credentials",
+                    ));
+                }
+                "ssh" if url.password().is_some() => {
+                    return Err(DtrError::new(
+                        "GitHub SSH repository URLs must not contain a password",
+                    ));
+                }
+                _ => {}
             }
 
             let mut segments = normalized_segments(url.path())?;
-            let forge = if host == "github.com" {
+            if forge == Forge::GitHub {
                 if segments.len() != 2 {
                     return Err(DtrError::new(
-                        "GitHub references must be repository-root URLs like https://github.com/owner/repo",
+                        "GitHub references must identify a repository root such as https://github.com/owner/repo",
                     ));
                 }
-                Forge::GitHub
             } else {
                 if segments.len() < 2 || segments.iter().any(|segment| segment == "-") {
                     return Err(DtrError::new(
                         "GitLab references must be repository-root URLs like https://gitlab.com/group/repo",
                     ));
                 }
-                Forge::GitLab
-            };
+            }
 
             let repo = strip_dot_git(&segments.pop().expect("at least two segments")).to_owned();
             if repo.is_empty() {
@@ -188,7 +207,11 @@ impl RepoSpec {
                 host,
                 namespace: segments,
                 repo,
-                remote: Some(OsString::from(text.trim_end_matches('/'))),
+                remote: Some(OsString::from(
+                    text.split_once('#')
+                        .map_or(text, |(base, _)| base)
+                        .trim_end_matches('/'),
+                )),
             });
         }
 
@@ -539,6 +562,35 @@ fn parse_scp_like(text: &str) -> Option<(String, String)> {
     Some((host.to_owned(), strip_dot_git(path).to_owned()))
 }
 
+fn parse_github_scp_like(text: &str) -> Result<Option<RepoSpec>, DtrError> {
+    let remote = text.split_once('#').map_or(text, |(base, _)| base);
+    let Some((left, path)) = remote.split_once(':') else {
+        return Ok(None);
+    };
+    if !left.eq_ignore_ascii_case("git@github.com") {
+        return Ok(None);
+    }
+
+    let segments = path.trim_matches('/').split('/').collect::<Vec<_>>();
+    if segments.len() != 2 || !segments.iter().all(|part| valid_github_component(part)) {
+        return Err(DtrError::new(
+            "GitHub SSH references must identify a repository root such as git@github.com:owner/repo",
+        ));
+    }
+    let repo = strip_dot_git(segments[1]);
+    if repo.is_empty() {
+        return Err(DtrError::new("repository name is empty"));
+    }
+
+    Ok(Some(RepoSpec::Forge {
+        forge: Forge::GitHub,
+        host: "github.com".to_owned(),
+        namespace: vec![segments[0].to_owned()],
+        repo: repo.to_owned(),
+        remote: Some(OsString::from(remote.trim_end_matches('/'))),
+    }))
+}
+
 fn valid_github_component(value: &str) -> bool {
     !value.is_empty()
         && value != "."
@@ -654,6 +706,74 @@ mod tests {
     }
 
     #[test]
+    fn strips_fragments_from_recognized_forge_references() {
+        for (value, slug, remote) in [
+            (
+                "https://github.com/owner/tool.git/#installation",
+                "owner/tool",
+                "https://github.com/owner/tool.git",
+            ),
+            (
+                "https://gitlab.com/group/tool#readme",
+                "group/tool",
+                "https://gitlab.com/group/tool",
+            ),
+            (
+                "git@github.com:owner/tool.git#readme",
+                "owner/tool",
+                "git@github.com:owner/tool.git",
+            ),
+            (
+                "ssh://git@github.com/owner/tool.git#readme",
+                "owner/tool",
+                "ssh://git@github.com/owner/tool.git",
+            ),
+        ] {
+            let spec = parse(value);
+            assert_eq!(spec.forge_slug().as_deref(), Some(slug), "{value}");
+            assert_eq!(
+                spec.git_remote().unwrap(),
+                OsString::from(remote),
+                "{value}"
+            );
+        }
+
+        let shorthand = parse("owner/tool#readme");
+        assert_eq!(shorthand.forge_slug().as_deref(), Some("owner/tool"));
+        assert_eq!(
+            shorthand.git_remote().unwrap(),
+            OsString::from("https://github.com/owner/tool.git")
+        );
+    }
+
+    #[test]
+    fn recognizes_gcl_github_ssh_forms_as_forge_repositories() {
+        for value in [
+            "git@github.com:owner/tool.git",
+            "ssh://git@github.com/owner/tool.git",
+        ] {
+            let spec = parse(value);
+            assert!(
+                matches!(
+                    spec,
+                    RepoSpec::Forge {
+                        forge: Forge::GitHub,
+                        ..
+                    }
+                ),
+                "{value}"
+            );
+            assert_eq!(spec.forge_slug().as_deref(), Some("owner/tool"), "{value}");
+            assert_eq!(spec.git_remote().unwrap(), OsString::from(value), "{value}");
+        }
+
+        assert!(matches!(
+            parse("ssh://owner@github.com/owner/tool.git"),
+            RepoSpec::GitUrl { .. }
+        ));
+    }
+
+    #[test]
     fn install_sources_separate_go_queries_from_remote_repositories() {
         for (value, expected_remote, expected_query) in [
             (
@@ -724,11 +844,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_forge_browser_pages_queries_and_fragments() {
+    fn rejects_forge_browser_pages_and_queries() {
         for value in [
             "https://github.com/o/r/tree/main",
             "https://github.com/o/r?tab=readme",
-            "https://github.com/o/r#readme",
+            "https://github.com/o/r/tree/main#readme",
             "https://gitlab.com/o/r/-/blob/main/README.md",
         ] {
             assert!(RepoSpec::parse(OsStr::new(value)).is_err(), "{value}");
@@ -744,6 +864,12 @@ mod tests {
         ] {
             assert!(matches!(parse(value), RepoSpec::GitUrl { .. }), "{value}");
         }
+
+        let fragmented = "https://example.com/path/tool.git#readme";
+        assert_eq!(
+            parse(fragmented).git_remote().unwrap(),
+            OsString::from(fragmented)
+        );
     }
 
     #[test]

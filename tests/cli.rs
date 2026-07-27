@@ -656,6 +656,132 @@ fn github_url_prefers_gh_and_normalizes_a_trailing_slash() {
 }
 
 #[test]
+fn forge_clone_strips_repository_url_fragments() {
+    let github = Harness::new(&["git", "gh"]);
+    let output = github.run(&["clone", "https://github.com/owner/repo.git/#installation"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        github.invocation("gh").args,
+        ["repo", "clone", "https://github.com/owner/repo.git"]
+    );
+
+    let gitlab = Harness::new(&["git", "glab"]);
+    let output = gitlab.run(&["clone", "https://gitlab.com/group/repo#readme"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        gitlab.invocation("glab").args,
+        ["repo", "clone", "https://gitlab.com/group/repo"]
+    );
+}
+
+#[test]
+fn github_upstream_remote_name_is_forwarded_to_gh() {
+    let short = Harness::new(&["git", "gh"]);
+    let output = short.run(&["clone", "--depth", "1", "owner/repo", "-U", "parent"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        short.invocation("gh").args,
+        [
+            "repo",
+            "clone",
+            "--upstream-remote-name",
+            "parent",
+            "owner/repo",
+            "--",
+            "--depth",
+            "1",
+        ]
+    );
+
+    let long = Harness::new(&["git", "gh"]);
+    let output = long.run(&["clone", "--upstream-remote-name=source", "owner/repo"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        long.invocation("gh").args,
+        [
+            "repo",
+            "clone",
+            "--upstream-remote-name",
+            "source",
+            "owner/repo",
+        ]
+    );
+}
+
+#[test]
+fn upstream_remote_name_requires_github_and_gh() {
+    let gitlab = Harness::new(&["git", "gh", "glab"]);
+    let output = gitlab.run(&["clone", "-U", "parent", "https://gitlab.com/group/repo"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("applies only to recognized GitHub repositories"));
+    assert!(!gitlab.was_invoked("gh"));
+    assert!(!gitlab.was_invoked("glab"));
+    assert!(!gitlab.was_invoked("git"));
+
+    let missing_gh = Harness::new(&["git"]);
+    let output = missing_gh.run(&["clone", "-U", "parent", "owner/repo"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("gh is required for using -U/--upstream-remote-name"));
+    assert!(!missing_gh.was_invoked("git"));
+}
+
+#[test]
+fn github_ssh_forms_use_gh_and_support_derived_directories() {
+    for remote in [
+        "git@github.com:owner/repo.git",
+        "ssh://git@github.com/owner/repo.git",
+    ] {
+        let harness = Harness::new(&["git", "gh"]);
+        let output = harness.run(&["clone", "-D", remote]);
+        assert!(output.status.success(), "{remote}: {}", stderr(&output));
+        assert_eq!(
+            harness.invocation("gh").args,
+            ["repo", "clone", remote, "owner/repo"],
+            "{remote}"
+        );
+        assert!(harness.work.join("owner").is_dir(), "{remote}");
+    }
+}
+
+#[test]
+fn github_ssh_clone_preserves_transport_on_git_fallback() {
+    let harness = Harness::new(&["git"]);
+    let remote = "git@github.com:owner/repo.git";
+    let output = harness.run(&["clone", remote]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(harness.invocation("git").args, ["clone", "--", remote]);
+}
+
+#[test]
+fn github_ssh_owner_match_uses_process_scoped_account() {
+    let harness = Harness::new(&["git", "gh"]);
+    assert!(
+        harness
+            .run(&[
+                "config",
+                "set",
+                "github.auth.auto_switch",
+                "mike-clark-8192",
+            ])
+            .status
+            .success()
+    );
+
+    let output = harness.run(&["clone", "git@github.com:mike-clark-8192/private.git"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let clone = harness.invocation("gh");
+    assert_eq!(
+        clone.args,
+        [
+            "repo",
+            "clone",
+            "https://github.com/mike-clark-8192/private.git",
+        ]
+    );
+    assert_eq!(clone.gh_token_account.as_deref(), Some("mike-clark-8192"));
+}
+
+#[test]
 fn github_clone_falls_back_to_git_when_gh_is_absent() {
     let harness = Harness::new(&["git"]);
     let output = harness.run(&["clone", "owner/repo"]);

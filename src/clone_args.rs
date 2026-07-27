@@ -12,6 +12,8 @@ Clone a local or remote repository using git, gh, or glab.
 dtr options:
   -O, --name-owner  if [dir] is omitted, use namespace--repo
   -D                if [dir] is omitted, use namespace/repo
+  -U, --upstream-remote-name NAME
+                    name the upstream remote created by gh
   -h, --help        print help
 
 Recognized git clone options may appear in normal git-clone positions.
@@ -31,6 +33,7 @@ pub(crate) struct CloneRequest {
     pub(crate) directory: Option<OsString>,
     pub(crate) git_options: Vec<OsString>,
     pub(crate) name_mode: NameMode,
+    pub(crate) upstream_remote_name: Option<OsString>,
 }
 
 pub(crate) enum ParsedClone {
@@ -57,6 +60,7 @@ pub(crate) fn parse_clone_args(argv: Vec<OsString>) -> Result<ParsedClone, DtrEr
     let mut git_options = Vec::new();
     let mut positionals = Vec::new();
     let mut name_mode = NameMode::Default;
+    let mut upstream_remote_name = None;
     let mut after_double_dash = false;
     let mut index = 0;
 
@@ -93,6 +97,44 @@ pub(crate) fn parse_clone_args(argv: Vec<OsString>) -> Result<ParsedClone, DtrEr
                 name_mode = NameMode::OwnerDirectory;
                 index += 1;
             }
+            Some("-U" | "--upstream-remote-name") => {
+                if upstream_remote_name.is_some() {
+                    return Err(DtrError::new(
+                        "-U/--upstream-remote-name may be specified only once",
+                    ));
+                }
+                let value = argv.get(index + 1).ok_or_else(|| {
+                    DtrError::new(format!(
+                        "option requires a value: {}",
+                        argument.to_string_lossy()
+                    ))
+                })?;
+                if value == OsStr::new("--") {
+                    return Err(DtrError::new(format!(
+                        "option requires a value: {}",
+                        argument.to_string_lossy()
+                    )));
+                }
+                upstream_remote_name = Some(value.clone());
+                index += 2;
+            }
+            Some(text) if text.starts_with("--upstream-remote-name=") => {
+                if upstream_remote_name.is_some() {
+                    return Err(DtrError::new(
+                        "-U/--upstream-remote-name may be specified only once",
+                    ));
+                }
+                let (_, value) = text
+                    .split_once('=')
+                    .expect("matched upstream remote name with equals");
+                if value.is_empty() {
+                    return Err(DtrError::new(
+                        "option requires a value: --upstream-remote-name",
+                    ));
+                }
+                upstream_remote_name = Some(OsString::from(value));
+                index += 1;
+            }
             Some(text) if text.starts_with('-') && text != "-" => {
                 let consumed = table.parse_option(&argv, index, &mut git_options)?;
                 index += consumed;
@@ -121,6 +163,7 @@ pub(crate) fn parse_clone_args(argv: Vec<OsString>) -> Result<ParsedClone, DtrEr
         directory,
         git_options,
         name_mode,
+        upstream_remote_name,
     }))
 }
 
