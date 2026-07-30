@@ -38,7 +38,7 @@ pub(crate) struct CloneRequest {
 
 pub(crate) enum ParsedClone {
     Help,
-    Request(CloneRequest),
+    Request(Box<CloneRequest>),
 }
 
 #[derive(Debug)]
@@ -158,13 +158,13 @@ pub(crate) fn parse_clone_args(argv: Vec<OsString>) -> Result<ParsedClone, DtrEr
 
     let spec = RepoSpec::parse(&positionals[0])?;
     let directory = positionals.get(1).cloned();
-    Ok(ParsedClone::Request(CloneRequest {
+    Ok(ParsedClone::Request(Box::new(CloneRequest {
         spec,
         directory,
         git_options,
         name_mode,
         upstream_remote_name,
-    }))
+    })))
 }
 
 fn help_requested(argv: &[OsString]) -> bool {

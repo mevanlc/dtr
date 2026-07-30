@@ -674,7 +674,11 @@ mod tests {
     fn classifies_explicit_local_paths_before_shorthand() {
         assert!(matches!(parse("./owner/repo"), RepoSpec::Local { .. }));
         assert!(matches!(parse("../owner/repo"), RepoSpec::Local { .. }));
-        assert!(matches!(parse("/owner/repo"), RepoSpec::Local { .. }));
+        let absolute = std::env::current_dir().unwrap().join("owner/repo");
+        assert!(matches!(
+            RepoSpec::parse(absolute.as_os_str()).unwrap(),
+            RepoSpec::Local { .. }
+        ));
         assert!(matches!(
             parse("owner/repo"),
             RepoSpec::Forge {
