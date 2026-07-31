@@ -54,7 +54,7 @@ pub(crate) struct InstallArgs {
     pub(crate) no_latest: bool,
 
     /// Repository name, path, or remote; remote Go sources may end in @<query>
-    #[arg(value_name = "DTR_REPOSPEC")]
+    #[arg(value_name = "DTR_REPOSPEC", default_value = ".")]
     pub(crate) repospec: OsString,
 
     /// Native installer arguments, following --
@@ -164,6 +164,15 @@ mod tests {
         let cli =
             Cli::try_parse_from(["dtr", "i", "--tool", "go", "owner/repo"]).expect("valid command");
         assert!(matches!(cli.command, DtrCommand::Install(_)));
+    }
+
+    #[test]
+    fn install_defaults_to_the_current_directory() {
+        let cli = Cli::try_parse_from(["dtr", "i"]).expect("valid current-directory install");
+        let DtrCommand::Install(args) = cli.command else {
+            panic!("expected install command");
+        };
+        assert_eq!(args.repospec, ".");
     }
 
     #[test]

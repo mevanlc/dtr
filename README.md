@@ -189,12 +189,15 @@ checkout is not persistently bound to that identity for later `git fetch` or
 ## Install from a repository
 
 ```text
-dtr [--explain|-n] install|i [-t|--tool <tool>] [--no-latest] <dtr-repospec> [-- <install-arg>...]
+dtr [--explain|-n] install|i [-t|--tool <tool>] [--no-latest] [<dtr-repospec>] [-- <install-arg>...]
 ```
 
 `install` is deliberately repo-oriented. Dtr does not wrap the package-registry
 surface that `cargo install`, `go install`, `uv tool install`, `pipx install`,
 and `npm install -g` already provide well.
+
+When `<dtr-repospec>` is omitted, it defaults to `.`, so `dtr i` and `dtr i .`
+are equivalent. Automatic tool selection then inspects the current directory.
 
 `--tool` accepts `go`, `cargo`, `uv`, `pipx`, `npm`, and `auto`. `rust` is an
 alias for the preferred Cargo spelling. The default is `auto`, so these are

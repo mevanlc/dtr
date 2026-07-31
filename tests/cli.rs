@@ -936,6 +936,22 @@ fn auto_local_install_selects_go_cargo_and_npm_from_root_manifests() {
 }
 
 #[test]
+fn omitted_install_repospec_auto_installs_the_current_directory() {
+    let harness = Harness::new(&["cargo"]);
+    fs::write(harness.work.join("Cargo.toml"), "synthetic manifest\n").unwrap();
+
+    let output = harness.run(&["i"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let invocation = harness.invocation("cargo");
+    assert_eq!(
+        invocation.cwd.canonicalize().unwrap(),
+        harness.work.canonicalize().unwrap()
+    );
+    assert_eq!(invocation.args, ["install", "--path", "."]);
+}
+
+#[test]
 fn auto_python_prefers_uv_and_falls_back_to_pipx() {
     let uv = Harness::new(&["uv", "pipx"]);
     let repository = uv.local_repository("python-tool", &["pyproject.toml", "setup.cfg"], &[]);

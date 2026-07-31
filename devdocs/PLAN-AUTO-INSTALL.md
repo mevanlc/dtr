@@ -15,14 +15,18 @@ interface or roadmap status this increment superseded.
 Repository installation now uses one tool-valued option:
 
 ```text
-dtr [--explain|-n] install|i [-t|--tool <tool>] <dtr-repospec>
-dtr [--explain|-n] install|i [-t|--tool <tool>] <dtr-repospec> -- <installer-arg>...
+dtr [--explain|-n] install|i [-t|--tool <tool>] [<dtr-repospec>]
+dtr [--explain|-n] install|i [-t|--tool <tool>] [<dtr-repospec>] -- <installer-arg>...
 ```
 
 The supported values are `go`, `cargo`, `uv`, `pipx`, `npm`, and `auto`.
 `rust` is accepted as an alias for the preferred `cargo` value. `auto` is the
 default when `--tool` is omitted. The former `--go`, `--rust`, `--cargo`,
 `--uv`, `--pipx`, and `--npm` selector flags are no longer accepted.
+
+The repository reference defaults to `.` when omitted. Bare `dtr install` and
+`dtr i` therefore use the same local-repository parsing, inspection, planning,
+and execution paths as an explicit `dtr install .`.
 
 An explicit non-auto tool preserves the established backend mappings and skips
 repository inspection. Native installer arguments retain the existing `--`
@@ -140,6 +144,7 @@ remain byte-safe where the underlying platform permits non-UTF-8 paths.
 11. [x] Update the README and roadmap documentation.
 12. [x] Add `just check` as the complete local validation entry point.
 13. [x] Add install-only Go version queries without changing clone semantics.
+14. [x] Default an omitted install repository reference to the current directory.
 
 ## Validation record
 
