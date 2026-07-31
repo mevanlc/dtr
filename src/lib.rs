@@ -34,7 +34,7 @@ fn run() -> Result<i32, DtrError> {
                 print!("{}", clone_args::HELP);
                 return Ok(0);
             }
-            ParsedClone::Request(request) => plan_clone(request)?,
+            ParsedClone::Request(request) => plan_clone(*request)?,
         },
         DtrCommand::Install(args) => plan_install(args)?,
         DtrCommand::Config(args) => {

@@ -39,6 +39,18 @@ impl Config {
         Self::load_at(&config_file_path()?)
     }
 
+    pub(crate) fn load_for_runtime() -> Result<Self, DtrError> {
+        let path = discover_config_file_path()?;
+        Self::load_optional_at(path.as_deref())
+    }
+
+    fn load_optional_at(path: Option<&Path>) -> Result<Self, DtrError> {
+        match path {
+            Some(path) => Self::load_at(path),
+            None => Ok(Self::default()),
+        }
+    }
+
     fn load_at(path: &Path) -> Result<Self, DtrError> {
         let text = match fs::read_to_string(path) {
             Ok(text) => text,
@@ -256,36 +268,30 @@ fn is_valid_account(account: &str) -> bool {
 }
 
 fn config_file_path() -> Result<PathBuf, DtrError> {
+    discover_config_file_path()?
+        .ok_or_else(|| DtrError::new("could not locate the user home directory"))
+}
+
+fn discover_config_file_path() -> Result<Option<PathBuf>, DtrError> {
     let dtr_config_dir = env::var_os("DTR_CONFIG_DIR");
-    let xdg_config_home = env::var_os("XDG_CONFIG_HOME");
-    let home = env::var_os("HOME");
-    config_file_path_from(
-        dtr_config_dir.as_deref(),
-        xdg_config_home.as_deref(),
-        home.as_deref(),
-    )
+    let home = home::home_dir();
+    config_file_path_from(dtr_config_dir.as_deref(), home.as_deref())
 }
 
 fn config_file_path_from(
     dtr_config_dir: Option<&OsStr>,
-    xdg_config_home: Option<&OsStr>,
-    home: Option<&OsStr>,
-) -> Result<PathBuf, DtrError> {
+    home: Option<&Path>,
+) -> Result<Option<PathBuf>, DtrError> {
     if let Some(directory) = dtr_config_dir {
         if directory.is_empty() {
             return Err(DtrError::new("DTR_CONFIG_DIR must not be empty"));
         }
-        return Ok(Path::new(directory).join("config.toml"));
+        return Ok(Some(Path::new(directory).join("config.toml")));
     }
-    if let Some(directory) = xdg_config_home.filter(|directory| !directory.is_empty()) {
-        return Ok(Path::new(directory).join("dtr/config.toml"));
+    if let Some(directory) = home {
+        return Ok(Some(directory.join(".config/dtr/config.toml")));
     }
-    if let Some(directory) = home.filter(|directory| !directory.is_empty()) {
-        return Ok(Path::new(directory).join(".config/dtr/config.toml"));
-    }
-    Err(DtrError::new(
-        "could not locate dtr configuration: HOME, XDG_CONFIG_HOME, and DTR_CONFIG_DIR are unset",
-    ))
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -339,24 +345,28 @@ mod tests {
     }
 
     #[test]
-    fn config_path_precedence_is_deterministic() {
+    fn config_path_prefers_override_then_uses_user_home() {
         assert_eq!(
-            config_file_path_from(
-                Some(OsStr::new("/dtr")),
-                Some(OsStr::new("/xdg")),
-                Some(OsStr::new("/home")),
-            )
-            .unwrap(),
-            PathBuf::from("/dtr/config.toml")
+            config_file_path_from(Some(OsStr::new("/dtr")), Some(Path::new("/home"))).unwrap(),
+            Some(PathBuf::from("/dtr/config.toml"))
         );
         assert_eq!(
-            config_file_path_from(None, Some(OsStr::new("/xdg")), Some(OsStr::new("/home")),)
-                .unwrap(),
-            PathBuf::from("/xdg/dtr/config.toml")
+            config_file_path_from(None, Some(Path::new("/home"))).unwrap(),
+            Some(PathBuf::from("/home/.config/dtr/config.toml"))
         );
-        assert_eq!(
-            config_file_path_from(None, None, Some(OsStr::new("/home"))).unwrap(),
-            PathBuf::from("/home/.config/dtr/config.toml")
-        );
+        assert_eq!(config_file_path_from(None, None).unwrap(), None);
+        assert!(config_file_path_from(Some(OsStr::new("")), None).is_err());
+    }
+
+    #[test]
+    fn runtime_load_only_defaults_when_config_location_is_undiscoverable() {
+        let config = Config::load_optional_at(None).unwrap();
+        assert_eq!(config.auto_switch_account("mevanlc"), None);
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(&path, "not valid toml = [").unwrap();
+        let error = Config::load_optional_at(Some(&path)).err().unwrap();
+        assert!(error.to_string().contains("could not parse configuration"));
     }
 }

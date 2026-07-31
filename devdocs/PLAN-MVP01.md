@@ -104,6 +104,14 @@ ${HOME}/.config/dtr/config.toml     otherwise
 `DTR_CONFIG_DIR` overrides the containing directory. This is useful for isolated
 automation and tests; the filename remains `config.toml`.
 
+※ The default-location rule above is superseded: dtr now ignores
+`XDG_CONFIG_HOME` and always uses `<user-home>/.config/dtr/config.toml` when
+`DTR_CONFIG_DIR` is unset.
+
+※ Clone and install treat an undiscoverable configuration location as an empty
+configuration. Explicitly invalid overrides and errors reading or parsing a
+discovered configuration file still fail the operation.
+
 The setting is represented as a TOML array even though the CLI's compact value
 uses commas:
 

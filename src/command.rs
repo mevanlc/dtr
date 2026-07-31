@@ -103,7 +103,26 @@ pub(crate) fn command_exists(program: &str) -> bool {
     let Some(path) = env::var_os("PATH") else {
         return false;
     };
-    env::split_paths(&path).any(|directory| is_executable(&directory.join(program)))
+    env::split_paths(&path).any(|directory| command_exists_in(&directory, program))
+}
+
+#[cfg(not(windows))]
+fn command_exists_in(directory: &Path, program: &str) -> bool {
+    is_executable(&directory.join(program))
+}
+
+#[cfg(windows)]
+fn command_exists_in(directory: &Path, program: &str) -> bool {
+    if is_executable(&directory.join(program)) {
+        return true;
+    }
+    if Path::new(program).extension().is_some() {
+        return false;
+    }
+
+    let mut executable = OsString::from(program);
+    executable.push(".exe");
+    is_executable(&directory.join(executable))
 }
 
 #[cfg(unix)]
@@ -171,6 +190,17 @@ fn quote_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn command_lookup_recognizes_windows_exe_suffix() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("cargo.exe"), []).unwrap();
+
+        assert!(command_exists_in(directory.path(), "cargo"));
+        assert!(command_exists_in(directory.path(), "cargo.exe"));
+        assert!(!command_exists_in(directory.path(), "missing"));
+    }
 
     #[test]
     fn shell_quotes_simple_empty_and_apostrophe_values() {

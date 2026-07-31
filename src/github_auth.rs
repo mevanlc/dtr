@@ -15,7 +15,7 @@ pub(crate) struct GithubAuthSelection {
 }
 
 pub(crate) fn select_for_owner(owner: &str) -> Result<Option<GithubAuthSelection>, DtrError> {
-    let config = Config::load()?;
+    let config = Config::load_for_runtime()?;
     let Some(account) = config.auto_switch_account(owner) else {
         return Ok(None);
     };

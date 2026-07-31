@@ -177,10 +177,14 @@ dtr config get github.auth.auto_switch
 dtr config unset github.auth.auto_switch
 ```
 
-Configuration is stored in `$XDG_CONFIG_HOME/dtr/config.toml`, or
-`$HOME/.config/dtr/config.toml` when `XDG_CONFIG_HOME` is unset.
+Configuration is stored at `<user-home>/.config/dtr/config.toml`.
 `DTR_CONFIG_DIR` overrides the containing directory. The file contains account
 names only; dtr never writes GitHub tokens to it.
+
+Clone and install operations proceed without account auto-switching when no
+configuration location can be discovered. Explicitly invalid configuration,
+including an empty `DTR_CONFIG_DIR` or malformed configuration file, remains an
+error.
 
 The selected identity is scoped to the clone or install process. A resulting
 checkout is not persistently bound to that identity for later `git fetch` or
