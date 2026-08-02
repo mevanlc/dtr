@@ -40,6 +40,10 @@ meaning.
 
 ## Conservative automatic selection
 
+※ The original increment considered only exact manifests in the specified local
+directory or remote repository root. Current behavior retains that rule, with
+the bounded local Go-source exception described below.
+
 Auto mode considers exact, file-like names in the repository root:
 
 | Root manifest | Ecosystem | Selected tool |
@@ -49,9 +53,16 @@ Auto mode considers exact, file-like names in the repository root:
 | `pyproject.toml`, `setup.py`, or `setup.cfg` | Python | `uv` if available, otherwise `pipx` |
 | `package.json` | JavaScript | `npm` |
 
-Names are case-sensitive. A directory with a manifest-like name is not
-evidence. Lockfiles, tool configuration, nested manifests, and other inferred
-signals are deliberately ignored.
+Names are case-sensitive. A directory with a manifest-like name is not evidence.
+Lockfiles, tool configuration, and other inferred signals are deliberately
+ignored.
+
+For a local directory with no supported manifest, a direct non-test `*.go` file
+triggers one additional check. Dtr asks Git for the enclosing worktree root and
+walks upward, stopping at that root, for the nearest file-like `go.mod`. A match
+selects Go but does not change the requested install directory. This lets Go
+apply its native ancestor-module resolution to command directories without
+classifying unrelated subdirectories or changing remote inspection.
 
 Exactly one ecosystem must be recognized. If no ecosystem or multiple
 ecosystems are present, dtr declines to install and suggests an explicit
@@ -80,8 +91,9 @@ the username portion of an SSH remote.
 
 ## Root inspection
 
-Local repositories are inspected with a direct root-directory listing. Remote
-inspection uses the lightest supported mechanism for the repospec:
+※ Local repositories were originally inspected only with a direct directory
+listing. They now also support the bounded Go ancestor lookup described above.
+Remote inspection still uses the lightest supported mechanism for the repospec:
 
 1. A recognized GitHub repository uses `gh api` to request the default branch's
    root tree. Process-scoped GitHub account selection is resolved before the
@@ -145,6 +157,7 @@ remain byte-safe where the underlying platform permits non-UTF-8 paths.
 12. [x] Add `just check` as the complete local validation entry point.
 13. [x] Add install-only Go version queries without changing clone semantics.
 14. [x] Default an omitted install repository reference to the current directory.
+15. [x] Detect local Go command subdirectories through a Git-bounded ancestor module lookup.
 
 ## Validation record
 

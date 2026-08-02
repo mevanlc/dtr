@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -163,6 +164,20 @@ if [ "${0##*/}" = git ] && [ "${1-}" = clone ] && [ "${2-}" = -h ]; then
   exit 129
 fi
 
+if [ "${0##*/}" = git ] && [ "${1-}" = -C ] && [ "${3-}" = rev-parse ] && [ "${4-}" = --show-toplevel ]; then
+  log="${DTR_TEST_LOG_DIR}/git-worktree-root"
+  : > "$log"
+  printf 'cwd=<%s>\n' "$PWD" >> "$log"
+  for arg in "$@"; do
+    printf 'arg=<%s>\n' "$arg" >> "$log"
+  done
+  if [ -n "${DTR_TEST_GIT_TOPLEVEL-}" ]; then
+    printf '%s\n' "$DTR_TEST_GIT_TOPLEVEL"
+    exit 0
+  fi
+  exit 128
+fi
+
 if [ "${0##*/}" = gh ] && [ "${1-}" = api ] && [ "${2-}" = user ]; then
   printf '%s\n' "${DTR_TEST_GH_OWNER}"
   exit 0
@@ -261,6 +276,28 @@ if [ "${0##*/}" = git ] && [ "${1-}" = -C ] && [ -n "${DTR_TEST_GIT_TREE_MARKER-
   exit 0
 fi
 
+if [ "${0##*/}" = go ] && [ "${1-}" = list ]; then
+  log="${DTR_TEST_LOG_DIR}/go-list"
+  : > "$log"
+  printf 'cwd=<%s>\n' "$PWD" >> "$log"
+  for arg in "$@"; do
+    printf 'arg=<%s>\n' "$arg" >> "$log"
+  done
+  printf '%s\n' "${DTR_TEST_GO_LIST_OUTPUT-}"
+  exit "${DTR_TEST_GO_LIST_EXIT-0}"
+fi
+
+if [ "${0##*/}" = go ] && [ "${1-}" = env ]; then
+  log="${DTR_TEST_LOG_DIR}/go-env"
+  : > "$log"
+  printf 'cwd=<%s>\n' "$PWD" >> "$log"
+  for arg in "$@"; do
+    printf 'arg=<%s>\n' "$arg" >> "$log"
+  done
+  printf '%s\n%s\n' "${DTR_TEST_GO_GOBIN-}" "${DTR_TEST_GO_GOPATH-}"
+  exit "${DTR_TEST_GO_ENV_EXIT-0}"
+fi
+
 log="${DTR_TEST_LOG_DIR}/${0##*/}"
 : > "$log"
 printf 'cwd=<%s>\n' "$PWD" >> "$log"
@@ -301,6 +338,13 @@ exit "${DTR_TEST_EXIT-0}"
     fs::set_permissions(path, permissions).unwrap();
 }
 
+fn write_executable(path: &Path) {
+    fs::write(path, "#!/bin/sh\n").unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -335,6 +379,35 @@ fn config_set_get_and_unset_round_trip_the_auto_switch_allowlist() {
         assert!(unset.status.success(), "{}", stderr(&unset));
     }
     let get = harness.run(&["config", "get", "github.auth.auto_switch"]);
+    assert_eq!(get.status.code(), Some(2));
+    assert!(stderr(&get).contains("is not set"));
+}
+
+#[test]
+fn config_set_get_list_and_unset_round_trip_narration() {
+    let harness = Harness::new(&[]);
+    let set = harness.run(&["config", "set", "narration", "false"]);
+    assert!(set.status.success(), "{}", stderr(&set));
+    assert_eq!(
+        fs::read_to_string(harness.config_file()).unwrap(),
+        "narration = false\n"
+    );
+
+    let get = harness.run(&["config", "get", "narration"]);
+    assert!(get.status.success(), "{}", stderr(&get));
+    assert_eq!(stdout(&get), "false\n");
+
+    let list = harness.run(&["config", "list"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    assert_eq!(stdout(&list), "narration=false\n");
+
+    let invalid = harness.run(&["config", "set", "narration", "yes"]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(stderr(&invalid).contains("narration must be true or false"));
+
+    let unset = harness.run(&["config", "unset", "narration"]);
+    assert!(unset.status.success(), "{}", stderr(&unset));
+    let get = harness.run(&["config", "get", "narration"]);
     assert_eq!(get.status.code(), Some(2));
     assert!(stderr(&get).contains("is not set"));
 }
@@ -460,6 +533,68 @@ fn github_clone_prefers_gh_and_forwards_flexible_git_options() {
             "--branch=main",
         ]
     );
+}
+
+#[test]
+fn clone_narration_echoes_the_command_and_prints_only_the_absolute_target() {
+    let harness = Harness::new(&["git", "gh"]);
+    let output = harness.run(&["clone", "owner/repo", "destination"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "{}\n",
+            harness
+                .work
+                .canonicalize()
+                .unwrap()
+                .join("destination")
+                .display()
+        )
+    );
+    assert_eq!(stderr(&output), "→ gh repo clone owner/repo destination\n");
+}
+
+#[test]
+fn narration_config_and_cli_overrides_have_the_expected_precedence() {
+    let harness = Harness::new(&["git", "gh"]);
+    assert!(
+        harness
+            .run(&["config", "set", "narration", "false"])
+            .status
+            .success()
+    );
+
+    let configured_off = harness.run(&["clone", "owner/repo", "configured-off"]);
+    assert!(
+        configured_off.status.success(),
+        "{}",
+        stderr(&configured_off)
+    );
+    assert_eq!(stdout(&configured_off), "");
+    assert_eq!(stderr(&configured_off), "");
+
+    let opted_in = harness.run(&["--narration", "clone", "owner/repo", "opted-in"]);
+    assert!(opted_in.status.success(), "{}", stderr(&opted_in));
+    assert_eq!(
+        stdout(&opted_in),
+        format!(
+            "{}\n",
+            harness
+                .work
+                .canonicalize()
+                .unwrap()
+                .join("opted-in")
+                .display()
+        )
+    );
+    assert!(stderr(&opted_in).starts_with("→ gh repo clone"));
+
+    let fresh = Harness::new(&["git", "gh"]);
+    let opted_out = fresh.run(&["--no-narration", "clone", "owner/repo", "opted-out"]);
+    assert!(opted_out.status.success(), "{}", stderr(&opted_out));
+    assert_eq!(stdout(&opted_out), "");
+    assert_eq!(stderr(&opted_out), "");
 }
 
 #[test]
@@ -933,6 +1068,71 @@ fn auto_local_install_selects_go_cargo_and_npm_from_root_manifests() {
         npm.invocation("npm").args,
         ["install", "--global", "--", "./npm-tool"]
     );
+}
+
+#[test]
+fn auto_local_go_subdirectory_uses_an_ancestor_module_and_keeps_its_working_directory() {
+    let harness = Harness::new(&["git", "go"]);
+    let repository = harness.work.join("go-tool");
+    let command_directory = repository.join("cmd/tool");
+    fs::create_dir_all(&command_directory).unwrap();
+    fs::write(repository.join("go.mod"), "module example.com/tool\n").unwrap();
+    fs::write(command_directory.join("entrypoint.go"), "package main\n").unwrap();
+    fs::write(command_directory.join("README.md"), "tool docs\n").unwrap();
+
+    let output = harness
+        .command(&["install", "./go-tool/cmd/tool"])
+        .env("DTR_TEST_GIT_TOPLEVEL", &repository)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let go = harness.invocation("go");
+    assert_eq!(go.args, ["install", "./..."]);
+    assert_eq!(go.cwd, command_directory.canonicalize().unwrap());
+    assert_eq!(
+        harness.invocation("git-worktree-root").args,
+        ["-C", "./go-tool/cmd/tool", "rev-parse", "--show-toplevel",]
+    );
+}
+
+#[test]
+fn local_go_ancestor_detection_requires_source_a_module_and_a_git_boundary() {
+    for (case, source, root_module, programs, expect_git_probe) in [
+        ("test-only", "main_test.go", true, &["git", "go"][..], false),
+        ("no-source", "README.md", true, &["git", "go"][..], false),
+        ("no-module", "main.go", false, &["git", "go"][..], true),
+        ("no-git", "main.go", true, &["go"][..], false),
+    ] {
+        let harness = Harness::new(programs);
+        let repository = harness.work.join(case);
+        let command_directory = repository.join("cmd/tool");
+        fs::create_dir_all(&command_directory).unwrap();
+        fs::write(command_directory.join(source), "package main\n").unwrap();
+        if root_module {
+            fs::write(repository.join("go.mod"), "module example.com/tool\n").unwrap();
+        } else {
+            fs::write(harness.work.join("go.mod"), "module outside\n").unwrap();
+        }
+
+        let repospec = format!("./{case}/cmd/tool");
+        let output = harness
+            .command(&["install", &repospec])
+            .env("DTR_TEST_GIT_TOPLEVEL", &repository)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{case}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("no supported manifest was found"),
+            "{case}: {}",
+            stderr(&output)
+        );
+        assert_eq!(
+            harness.was_invoked("git-worktree-root"),
+            expect_git_probe,
+            "{case}"
+        );
+        assert!(!harness.was_invoked("go"), "{case}");
+    }
 }
 
 #[test]
@@ -2140,6 +2340,135 @@ fn local_go_repo_installs_all_commands_from_that_directory() {
         fs::canonicalize(repo).unwrap()
     );
     assert_eq!(invocation.args, ["install", "./..."]);
+}
+
+#[test]
+fn local_go_install_reports_all_binaries_and_path_shadowing() {
+    let harness = Harness::new(&["go"]);
+    let repo = harness.work.join("local repo");
+    let install_directory = harness.work.join("go-bin");
+    fs::create_dir(&repo).unwrap();
+    fs::create_dir(&install_directory).unwrap();
+    let gh = install_directory.join("gh");
+    let gen_docs = install_directory.join("gen-docs");
+    write_executable(&gh);
+    write_executable(&gen_docs);
+    write_executable(&harness.bin.join("gh"));
+    let path = env::join_paths([harness.bin.as_path(), install_directory.as_path()]).unwrap();
+    let targets = format!("{}\n{}", gh.display(), gen_docs.display());
+
+    let output = harness
+        .command(&["install", "--tool", "go", "./local repo"])
+        .env("PATH", path)
+        .env("DTR_TEST_GO_LIST_OUTPUT", targets)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "");
+    let narration = stderr(&output);
+    assert!(
+        narration.contains(&format!(
+            "→ go install ./... (in '{}')",
+            repo.canonicalize().unwrap().display()
+        )),
+        "{narration}"
+    );
+    assert!(
+        narration.contains(&format!(
+            "installed: gh, gen-docs → {}",
+            install_directory.display()
+        )),
+        "{narration}"
+    );
+    assert!(
+        narration.contains(&format!(
+            "warning: 'gh' is shadowed by {} (earlier on PATH)",
+            harness.bin.join("gh").display()
+        )),
+        "{narration}"
+    );
+    assert!(!narration.contains("'gen-docs' is shadowed"), "{narration}");
+    assert_eq!(
+        harness.invocation("go-list").args,
+        [
+            "list",
+            "-f",
+            "{{if eq .Name \"main\"}}{{.Target}}{{end}}",
+            "./...",
+        ]
+    );
+}
+
+#[test]
+fn go_path_warning_survives_no_narration() {
+    let harness = Harness::new(&["go"]);
+    let install_directory = harness.work.join("go-bin");
+    fs::create_dir(&install_directory).unwrap();
+    write_executable(&install_directory.join("tool"));
+
+    let output = harness
+        .command(&["--no-narration", "install", "--tool", "go", "owner/tool"])
+        .env("DTR_TEST_GO_GOBIN", &install_directory)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "");
+    assert_eq!(
+        stderr(&output),
+        format!("warning: {} is not on PATH\n", install_directory.display())
+    );
+}
+
+#[test]
+fn path_symlink_to_the_installed_go_binary_is_not_reported_as_a_shadow() {
+    let harness = Harness::new(&["go"]);
+    let install_directory = harness.work.join("go-bin");
+    fs::create_dir(&install_directory).unwrap();
+    let installed = install_directory.join("tool");
+    write_executable(&installed);
+    std::os::unix::fs::symlink(&installed, harness.bin.join("tool")).unwrap();
+    let path = env::join_paths([harness.bin.as_path(), install_directory.as_path()]).unwrap();
+
+    let output = harness
+        .command(&["install", "--tool", "go", "owner/tool"])
+        .env("PATH", path)
+        .env("DTR_TEST_GO_GOBIN", &install_directory)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("installed: tool"));
+    assert!(!stderr(&output).contains("shadowed"), "{}", stderr(&output));
+}
+
+#[test]
+fn remote_go_install_uses_gopath_and_skips_a_major_version_suffix_for_the_binary_name() {
+    let harness = Harness::new(&["go"]);
+    let gopath = harness.work.join("gopath");
+    let install_directory = gopath.join("bin");
+    fs::create_dir_all(&install_directory).unwrap();
+    write_executable(&install_directory.join("tool"));
+    let path = env::join_paths([harness.bin.as_path(), install_directory.as_path()]).unwrap();
+
+    let output = harness
+        .command(&[
+            "install",
+            "--tool",
+            "go",
+            "https://example.com/owner/tool/v2",
+        ])
+        .env("PATH", path)
+        .env("DTR_TEST_GO_GOPATH", &gopath)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains(&format!(
+            "installed: tool → {}",
+            install_directory.display()
+        )),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

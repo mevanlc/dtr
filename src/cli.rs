@@ -14,6 +14,14 @@ pub(crate) struct Cli {
     #[arg(short = 'n', long)]
     pub(crate) explain: bool,
 
+    /// Print dtr's execution narration
+    #[arg(long, global = true, conflicts_with = "no_narration")]
+    pub(crate) narration: bool,
+
+    /// Suppress dtr's execution narration (warnings remain enabled)
+    #[arg(long, global = true, conflicts_with = "narration")]
+    pub(crate) no_narration: bool,
+
     #[command(subcommand)]
     pub(crate) command: DtrCommand,
 }
@@ -30,7 +38,7 @@ pub(crate) enum DtrCommand {
 
     /// Read or change dtr configuration
     #[command(
-        long_about = "Read or change dtr configuration.\n\nAvailable configuration keys:\n  github.auth.auto_switch\n      Comma-separated GitHub CLI account names eligible for process-scoped\n      authentication when an explicit repository owner matches."
+        long_about = "Read or change dtr configuration.\n\nAvailable configuration keys:\n  github.auth.auto_switch\n      Comma-separated GitHub CLI account names eligible for process-scoped\n      authentication when an explicit repository owner matches.\n  narration\n      Whether dtr prints command, clone-path, and install-success narration."
     )]
     Config(ConfigArgs),
 }
@@ -164,6 +172,35 @@ mod tests {
         let cli =
             Cli::try_parse_from(["dtr", "i", "--tool", "go", "owner/repo"]).expect("valid command");
         assert!(matches!(cli.command, DtrCommand::Install(_)));
+    }
+
+    #[test]
+    fn narration_overrides_are_global_and_mutually_exclusive() {
+        let before = Cli::try_parse_from(["dtr", "--no-narration", "clone", "owner/repo"])
+            .expect("valid narration opt-out");
+        assert!(before.no_narration);
+
+        let after = Cli::try_parse_from([
+            "dtr",
+            "install",
+            "--narration",
+            "--tool",
+            "go",
+            "owner/repo",
+        ])
+        .expect("valid narration opt-in");
+        assert!(after.narration);
+
+        assert!(
+            Cli::try_parse_from([
+                "dtr",
+                "--narration",
+                "--no-narration",
+                "install",
+                "owner/repo",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

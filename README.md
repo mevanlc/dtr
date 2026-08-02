@@ -74,7 +74,7 @@ Remote auto detection also uses Git for its filtered inspection fallback.
 ## Clone
 
 ```text
-dtr [--explain|-n] clone [options] <dtr-repospec> [dir]
+dtr [--explain|-n] [--narration|--no-narration] clone [options] <dtr-repospec> [dir]
 ```
 
 Repository references are classified in a stable order:
@@ -178,8 +178,9 @@ dtr config unset github.auth.auto_switch
 ```
 
 Configuration is stored at `<user-home>/.config/dtr/config.toml`.
-`DTR_CONFIG_DIR` overrides the containing directory. The file contains account
-names only; dtr never writes GitHub tokens to it.
+`DTR_CONFIG_DIR` overrides the containing directory. The file may contain the
+account allowlist and narration preference; dtr never writes GitHub tokens to
+it.
 
 Clone and install operations proceed without account auto-switching when no
 configuration location can be discovered. Explicitly invalid configuration,
@@ -193,7 +194,7 @@ checkout is not persistently bound to that identity for later `git fetch` or
 ## Install from a repository
 
 ```text
-dtr [--explain|-n] install|i [-t|--tool <tool>] [--no-latest] [<dtr-repospec>] [-- <install-arg>...]
+dtr [--explain|-n] [--narration|--no-narration] install|i [-t|--tool <tool>] [--no-latest] [<dtr-repospec>] [-- <install-arg>...]
 ```
 
 `install` is deliberately repo-oriented. Dtr does not wrap the package-registry
@@ -214,7 +215,8 @@ dtr install --tool auto owner/tool
 
 ### Automatic tool selection
 
-Auto selection lists the repository root and recognizes these exact file names:
+Auto selection normally lists the specified local directory or remote repository
+root and recognizes these exact file names:
 
 | Root manifest | Candidate |
 |---|---|
@@ -223,28 +225,37 @@ Auto selection lists the repository root and recognizes these exact file names:
 | `pyproject.toml`, `setup.py`, or `setup.cfg` | Python |
 | `package.json` | npm |
 
-Manifest-like directories, case variants, lockfiles, tool configuration, and
-nested manifests are not signals. Multiple Python manifests still identify one
-ecosystem. If more than one ecosystem is present, or none is present, dtr
-declines to run and lists the explicit `--tool` values instead of guessing.
-For an unambiguous Python repository, auto prefers uv when it is on `PATH`, then
-falls back to pipx; it fails if neither is available.
+Manifest-like directories, case variants, lockfiles, and tool configuration are
+not signals. Multiple Python manifests still identify one ecosystem. If more
+than one ecosystem is present, or none is present, dtr declines to run and lists
+the explicit `--tool` values instead of guessing. For an unambiguous Python
+repository, auto prefers uv when it is on `PATH`, then falls back to pipx; it
+fails if neither is available.
 
-Local repositories are listed directly. Recognized GitHub and GitLab repositories
-prefer their forge CLI's root-tree API when `gh` or `glab` is available. Other
-remotes, API failures, and truncated API results fall back to a temporary
-depth-one, single-branch Git clone with no tags, no checkout, and a
-`blob:none` filter. Dtr reads the root tree and removes the temporary repository;
-it does not deliberately fall back to a working checkout or full history.
+There is one bounded local exception. If the specified directory has no
+supported manifest but contains a file whose case-sensitive name ends in `.go`
+and not `_test.go`, dtr asks Git for the enclosing worktree root and walks upward
+for the nearest `go.mod`, without crossing that root. A match selects Go while
+keeping the originally specified directory as the install working directory.
+The file need not be named `main.go`, and unrelated local subdirectories without
+direct Go source files do not inherit the repository's Go classification.
+
+Local directories are listed directly, with only the bounded Go ancestor lookup
+described above. Recognized GitHub and GitLab repositories prefer their forge
+CLI's root-tree API when `gh` or `glab` is available. Other remotes, API failures,
+and truncated API results fall back to a temporary depth-one, single-branch Git
+clone with no tags, no checkout, and a `blob:none` filter. Dtr reads the root tree
+and removes the temporary repository; it does not deliberately fall back to a
+working checkout or full history.
 Inspection always uses the remote default branch. Except for the exact GitHub
 SSH forms documented above, an SSH or SCP-like repospec remains generic even
 when its hostname is a well-known forge.
 
 Explicit `--tool` selection skips repository inspection entirely. This is the
-escape hatch for mixed-language repositories, nested packages, inaccessible
-inspection APIs, and intentional backend overrides. Auto detection identifies
-the ecosystem only; the selected native installer still decides whether the
-repository actually provides an installable command.
+escape hatch for mixed-language repositories, non-Go nested packages,
+inaccessible inspection APIs, and intentional backend overrides. Auto detection
+identifies the ecosystem only; the selected native installer still decides
+whether the repository actually provides an installable command.
 
 ### Backend mappings
 
@@ -339,6 +350,43 @@ dtr install --tool go ./my-tool
 
 The implementation sets the child process working directory directly; it never
 constructs a shell command.
+
+## Execution narration
+
+Clone and install operations narrate the command dtr is about to run on stderr.
+For a command that runs in a repository directory, the same line includes its
+absolute working directory:
+
+```console
+→ go install ./... (in /Users/me/src/tool)
+```
+
+After a successful clone, dtr prints the new repository's absolute path as its
+only stdout line. This keeps the path easy to copy and makes command substitution
+useful:
+
+```sh
+cd "$(dtr clone owner/repo)"
+```
+
+After a successful Go install, dtr asks Go for the installed command targets and
+reports every binary and its directory. Local installs use `go list`; remote
+installs use `go env GOBIN GOPATH` and the installed import path:
+
+```console
+installed: gh, gen-docs → /Users/me/.go/bin
+warning: 'gh' is shadowed by /opt/homebrew/bin/gh (earlier on PATH)
+```
+
+Dtr warns when a reported Go binary directory is absent from `PATH`, or when an
+earlier executable shadows an installed binary. A PATH entry that is a symlink
+to the installed binary is not treated as a shadow.
+
+Use `--no-narration` to suppress dtr's command, clone-path, and install-success
+lines for one operation. Run `dtr config set narration false` for a persistent
+opt-out, and use `--narration` to override that setting for one operation. PATH
+warnings remain enabled when narration is disabled. Native child output is never
+suppressed.
 
 ## Explain before doing
 

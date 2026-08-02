@@ -11,11 +11,15 @@ use crate::cli::{ConfigArgs, ConfigCommand};
 use crate::error::DtrError;
 
 pub(crate) const GITHUB_AUTO_SWITCH_KEY: &str = "github.auth.auto_switch";
-pub(crate) const CONFIG_KEYS: &[&str] = &[GITHUB_AUTO_SWITCH_KEY];
+pub(crate) const NARRATION_KEY: &str = "narration";
+pub(crate) const CONFIG_KEYS: &[&str] = &[GITHUB_AUTO_SWITCH_KEY, NARRATION_KEY];
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Config {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    narration: Option<bool>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     github: Option<GithubConfig>,
 }
@@ -129,6 +133,10 @@ impl Config {
             .map(String::as_str)
     }
 
+    pub(crate) fn narration(&self) -> bool {
+        self.narration.unwrap_or(true)
+    }
+
     fn auto_switch_accounts(&self) -> Option<&[String]> {
         self.github.as_ref()?.auth.as_ref()?.auto_switch.as_deref()
     }
@@ -195,36 +203,73 @@ pub(crate) fn run(args: ConfigArgs) -> Result<i32, DtrError> {
                     println!("{GITHUB_AUTO_SWITCH_KEY}={}", accounts.join(","));
                 }
             }
+            if let Some(narration) = config.narration {
+                if args.name_only {
+                    println!("{NARRATION_KEY}");
+                } else {
+                    println!("{NARRATION_KEY}={narration}");
+                }
+            }
         }
         ConfigCommand::Set(args) => {
             require_known_key(&args.key)?;
-            let accounts = parse_auto_switch_accounts(&args.value)?;
             let path = config_file_path()?;
             let mut config = Config::load_at(&path)?;
-            config.set_auto_switch_accounts(accounts);
+            match args.key.as_str() {
+                GITHUB_AUTO_SWITCH_KEY => {
+                    config.set_auto_switch_accounts(parse_auto_switch_accounts(&args.value)?);
+                }
+                NARRATION_KEY => config.narration = Some(parse_bool(&args.value)?),
+                _ => unreachable!("known configuration key"),
+            }
             config.save_at(&path)?;
         }
         ConfigCommand::Get(args) => {
             require_known_key(&args.key)?;
             let config = Config::load()?;
-            let accounts = config.auto_switch_accounts().ok_or_else(|| {
-                DtrError::new(format!(
-                    "configuration key {GITHUB_AUTO_SWITCH_KEY} is not set"
-                ))
-            })?;
-            println!("{}", accounts.join(","));
+            match args.key.as_str() {
+                GITHUB_AUTO_SWITCH_KEY => {
+                    let accounts = config.auto_switch_accounts().ok_or_else(|| {
+                        DtrError::new(format!(
+                            "configuration key {GITHUB_AUTO_SWITCH_KEY} is not set"
+                        ))
+                    })?;
+                    println!("{}", accounts.join(","));
+                }
+                NARRATION_KEY => {
+                    let narration = config.narration.ok_or_else(|| {
+                        DtrError::new(format!("configuration key {NARRATION_KEY} is not set"))
+                    })?;
+                    println!("{narration}");
+                }
+                _ => unreachable!("known configuration key"),
+            }
         }
         ConfigCommand::Unset(args) => {
             require_known_key(&args.key)?;
             let path = config_file_path()?;
             if path.exists() {
                 let mut config = Config::load_at(&path)?;
-                config.unset_auto_switch_accounts();
+                match args.key.as_str() {
+                    GITHUB_AUTO_SWITCH_KEY => config.unset_auto_switch_accounts(),
+                    NARRATION_KEY => config.narration = None,
+                    _ => unreachable!("known configuration key"),
+                }
                 config.save_at(&path)?;
             }
         }
     }
     Ok(0)
+}
+
+fn parse_bool(value: &str) -> Result<bool, DtrError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(DtrError::new(format!(
+            "{NARRATION_KEY} must be true or false"
+        ))),
+    }
 }
 
 fn require_known_key(key: &str) -> Result<(), DtrError> {
@@ -310,6 +355,16 @@ mod tests {
     fn rejects_empty_and_invalid_accounts() {
         for value in ["", "mevanlc,", ",mevanlc", "me vanlc"] {
             assert!(parse_auto_switch_accounts(value).is_err(), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn narration_defaults_on_and_accepts_only_boolean_values() {
+        assert!(Config::default().narration());
+        assert!(parse_bool("true").unwrap());
+        assert!(!parse_bool("false").unwrap());
+        for value in ["", "yes", "False", "0"] {
+            assert!(parse_bool(value).is_err(), "{value:?}");
         }
     }
 

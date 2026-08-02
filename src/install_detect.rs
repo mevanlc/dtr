@@ -1,6 +1,6 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use serde::Deserialize;
@@ -21,6 +21,15 @@ enum Ecosystem {
     Python,
     Npm,
 }
+
+const MARKERS: [(Ecosystem, &str); 6] = [
+    (Ecosystem::Go, "go.mod"),
+    (Ecosystem::Cargo, "Cargo.toml"),
+    (Ecosystem::Python, "pyproject.toml"),
+    (Ecosystem::Python, "setup.py"),
+    (Ecosystem::Python, "setup.cfg"),
+    (Ecosystem::Npm, "package.json"),
+];
 
 struct RootEntry {
     name: Vec<u8>,
@@ -48,23 +57,105 @@ pub(crate) fn detect_tool(
     github_owner: Option<&str>,
     github_selection: Option<&GithubAuthSelection>,
 ) -> Result<InstallTool, DtrError> {
+    if let Some(path) = spec.local_path() {
+        return detect_local_tool(path);
+    }
     let entries = inspect_root(spec, github_owner, github_selection)?;
     infer_tool(&entries, command_exists)
+}
+
+fn detect_local_tool(path: &Path) -> Result<InstallTool, DtrError> {
+    let entries = inspect_local_root(path)?;
+    if has_supported_manifest(&entries) {
+        return infer_tool(&entries, command_exists);
+    }
+    if has_non_test_go_source(&entries)
+        && git_worktree_root(path).is_some_and(|root| has_ancestor_go_module(path, &root))
+    {
+        return Ok(InstallTool::Go);
+    }
+    infer_tool(&entries, command_exists)
+}
+
+fn has_supported_manifest(entries: &[RootEntry]) -> bool {
+    entries.iter().any(|entry| {
+        entry.file_like
+            && MARKERS
+                .iter()
+                .any(|(_, manifest)| entry.name == manifest.as_bytes())
+    })
+}
+
+fn has_non_test_go_source(entries: &[RootEntry]) -> bool {
+    entries.iter().any(|entry| {
+        entry.file_like && entry.name.ends_with(b".go") && !entry.name.ends_with(b"_test.go")
+    })
+}
+
+fn git_worktree_root(path: &Path) -> Option<PathBuf> {
+    if !command_exists("git") {
+        return None;
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    git_path_output(output.stdout)
+}
+
+fn git_path_output(mut output: Vec<u8>) -> Option<PathBuf> {
+    while matches!(output.last(), Some(b'\n' | b'\r')) {
+        output.pop();
+    }
+    if output.is_empty() {
+        return None;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+
+        Some(PathBuf::from(OsString::from_vec(output)))
+    }
+    #[cfg(not(unix))]
+    {
+        String::from_utf8(output).ok().map(PathBuf::from)
+    }
+}
+
+fn has_ancestor_go_module(path: &Path, worktree_root: &Path) -> bool {
+    let Ok(path) = path.canonicalize() else {
+        return false;
+    };
+    let Ok(worktree_root) = worktree_root.canonicalize() else {
+        return false;
+    };
+    if !path.starts_with(&worktree_root) {
+        return false;
+    }
+
+    let mut directory = path.parent();
+    while let Some(ancestor) = directory {
+        if ancestor.join("go.mod").is_file() {
+            return true;
+        }
+        if ancestor == worktree_root {
+            break;
+        }
+        directory = ancestor.parent();
+    }
+    false
 }
 
 fn infer_tool(
     entries: &[RootEntry],
     command_available: impl Fn(&str) -> bool,
 ) -> Result<InstallTool, DtrError> {
-    const MARKERS: [(Ecosystem, &str); 6] = [
-        (Ecosystem::Go, "go.mod"),
-        (Ecosystem::Cargo, "Cargo.toml"),
-        (Ecosystem::Python, "pyproject.toml"),
-        (Ecosystem::Python, "setup.py"),
-        (Ecosystem::Python, "setup.cfg"),
-        (Ecosystem::Npm, "package.json"),
-    ];
-
     let evidence = MARKERS
         .iter()
         .filter(|(_, marker)| {
@@ -126,10 +217,6 @@ fn inspect_root(
     github_owner: Option<&str>,
     github_selection: Option<&GithubAuthSelection>,
 ) -> Result<Vec<RootEntry>, DtrError> {
-    if let Some(path) = spec.local_path() {
-        return inspect_local_root(path);
-    }
-
     let mut failed_attempts = Vec::new();
     if let Some((owner, repo)) = github_repository(spec, github_owner)
         && command_exists("gh")
@@ -452,6 +539,39 @@ mod tests {
             RootEntry::file(b"uv.lock".to_vec()),
         ];
         assert!(infer_tool(&entries, |_| true).is_err());
+    }
+
+    #[test]
+    fn go_source_trigger_accepts_any_non_test_go_filename() {
+        assert!(has_non_test_go_source(&files(&["entrypoint.go"])));
+        assert!(has_non_test_go_source(&files(&["main.go", "README.md"])));
+        assert!(!has_non_test_go_source(&files(&["main_test.go"])));
+        assert!(!has_non_test_go_source(&files(&["MAIN.GO"])));
+        assert!(!has_non_test_go_source(&[RootEntry::directory(b"main.go")]));
+    }
+
+    #[test]
+    fn ancestor_go_module_search_stops_at_the_worktree_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let outer = temporary.path();
+        let worktree = outer.join("repo");
+        let command = worktree.join("cmd/tool");
+        fs::create_dir_all(&command).unwrap();
+
+        fs::write(outer.join("go.mod"), "module outside\n").unwrap();
+        assert!(!has_ancestor_go_module(&command, &worktree));
+
+        fs::write(worktree.join("go.mod"), "module example.com/tool\n").unwrap();
+        assert!(has_ancestor_go_module(&command, &worktree));
+    }
+
+    #[test]
+    fn git_path_output_removes_only_trailing_line_endings() {
+        assert_eq!(
+            git_path_output(b"/tmp/line\nbreak\r\n".to_vec()).unwrap(),
+            PathBuf::from("/tmp/line\nbreak")
+        );
+        assert_eq!(git_path_output(b"\r\n".to_vec()), None);
     }
 
     #[test]

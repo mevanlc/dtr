@@ -26,7 +26,20 @@ pub fn main_entry() -> i32 {
 }
 
 fn run() -> Result<i32, DtrError> {
-    let Cli { explain, command } = Cli::parse();
+    let Cli {
+        explain,
+        narration,
+        no_narration,
+        command,
+    } = Cli::parse();
+
+    let narration_override = if narration {
+        Some(true)
+    } else if no_narration {
+        Some(false)
+    } else {
+        None
+    };
 
     let plan = match command {
         DtrCommand::Clone(args) => match parse_clone_args(args.argv)? {
@@ -49,6 +62,10 @@ fn run() -> Result<i32, DtrError> {
         plan.explain();
         Ok(0)
     } else {
-        plan.execute()
+        let narration = match narration_override {
+            Some(narration) => narration,
+            None => config::Config::load_for_runtime()?.narration(),
+        };
+        plan.execute(narration)
     }
 }

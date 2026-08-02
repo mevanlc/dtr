@@ -4,7 +4,7 @@ use std::process::Command;
 
 use crate::cli::{InstallArgs, InstallTool};
 use crate::clone_args::{CloneRequest, NameMode};
-use crate::command::{CommandPlan, SecretEnvironment, command_exists};
+use crate::command::{CommandPlan, GoInstallSource, PlanKind, SecretEnvironment, command_exists};
 use crate::error::DtrError;
 use crate::github_auth;
 use crate::github_auth::GithubAuthSelection;
@@ -256,6 +256,7 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
             .expect("local spec has a path")
             .to_path_buf();
         return Ok(CommandPlan {
+            kind: PlanKind::GoInstall(GoInstallSource::Local),
             program: "go".into(),
             args: ["install", "./..."].map(OsString::from).to_vec(),
             current_dir: Some(directory),
@@ -277,7 +278,11 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
         import_path.push_str("@latest");
     }
 
+    let install_source = import_path.clone().into();
     Ok(CommandPlan {
+        kind: PlanKind::GoInstall(GoInstallSource::Remote {
+            import_path: install_source,
+        }),
         program: "go".into(),
         args: vec!["install".into(), import_path.into()],
         current_dir: None,
@@ -333,6 +338,7 @@ fn plan_cargo_install(context: InstallContext) -> Result<CommandPlan, DtrError> 
     command_args.extend(args.install_args);
 
     Ok(CommandPlan {
+        kind: PlanKind::OtherInstall,
         program: "cargo".into(),
         args: command_args,
         current_dir: None,
@@ -418,6 +424,7 @@ fn plan_python_install(
     };
 
     Ok(CommandPlan {
+        kind: PlanKind::OtherInstall,
         program: backend.program().into(),
         args: command_args,
         current_dir: None,
@@ -466,6 +473,7 @@ fn plan_npm_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
     command_args.extend([OsString::from("--"), source]);
 
     Ok(CommandPlan {
+        kind: PlanKind::OtherInstall,
         program: "npm".into(),
         args: command_args,
         current_dir: None,
@@ -612,6 +620,7 @@ fn forge_clone_plan(
         args.extend(git_options);
     }
     CommandPlan {
+        kind: PlanKind::Clone,
         program: program.into(),
         args,
         current_dir: None,
@@ -643,6 +652,7 @@ fn git_clone_plan(
         args.push(target_dir.as_os_str().to_os_string());
     }
     CommandPlan {
+        kind: PlanKind::Clone,
         program: "git".into(),
         args,
         current_dir: None,
