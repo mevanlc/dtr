@@ -15,7 +15,7 @@ since been superseded.
 
 ## Product definition
 
-`dtr` means **Do The Repo repo**.
+`dtr` means **Do the Repo** X, where X is currently: install or clone.
 
 The important noun is _repo_. `dtr` smooths over the inconsistent local-path,
 Git-remote, and forge-aware surfaces of development tools. It does not replace
