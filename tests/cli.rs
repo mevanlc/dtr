@@ -655,10 +655,212 @@ fn install_all_jobs_help_and_zero_validation_are_explicit() {
         help_text.contains("ceil(available CPU cores / 2)"),
         "{help_text}"
     );
+    assert!(help_text.contains("--list"), "{help_text}");
+    assert!(help_text.contains("--edit"), "{help_text}");
+    assert!(help_text.contains("--file <FILE>"), "{help_text}");
 
     let zero = harness.run(&["ia", "--jobs", "0"]);
     assert_eq!(zero.status.code(), Some(2));
     assert!(stderr(&zero).contains("expected 'auto' or a positive integer"));
+}
+
+#[test]
+fn install_add_tracks_a_successful_install_once_and_preserves_comments() {
+    let harness = Harness::new(&["cargo"]);
+    let repo = harness.local_repository("rip grep", &["Cargo.toml"], &[]);
+    let original = r#"# keep this comment
+[[install]]
+repospec = "owner/tool"
+tool = "go"
+"#;
+    harness.write_install_all(original);
+
+    let explain = harness.run(&[
+        "--explain",
+        "install",
+        "--add",
+        &repo,
+        "--",
+        "--force",
+        "--features",
+        "pcre2",
+    ]);
+    assert!(explain.status.success(), "{}", stderr(&explain));
+    assert!(stdout(&explain).contains("track:    "));
+    assert_eq!(
+        fs::read_to_string(harness.install_all_file()).unwrap(),
+        original
+    );
+    assert!(!harness.was_invoked("cargo"));
+
+    let arguments = [
+        "install",
+        "--add",
+        &repo,
+        "--",
+        "--force",
+        "--features",
+        "pcre2",
+    ];
+    let added = harness.run(&arguments);
+    assert!(added.status.success(), "{}", stderr(&added));
+    assert!(stderr(&added).contains("tracked:"), "{}", stderr(&added));
+    let config = fs::read_to_string(harness.install_all_file()).unwrap();
+    assert!(config.starts_with(original));
+    assert_eq!(config.matches("[[install]]").count(), 2);
+    assert!(config.contains("tool = \"cargo\""), "{config}");
+    assert!(
+        config.contains("args = [\"--force\", \"--features\", \"pcre2\"]"),
+        "{config}"
+    );
+    assert!(!config.contains("add ="), "{config}");
+
+    let duplicate = harness.run(&arguments);
+    assert!(duplicate.status.success(), "{}", stderr(&duplicate));
+    assert!(
+        stderr(&duplicate).contains("already tracked:"),
+        "{}",
+        stderr(&duplicate)
+    );
+    assert_eq!(
+        fs::read_to_string(harness.install_all_file()).unwrap(),
+        config
+    );
+}
+
+#[test]
+fn install_add_does_not_track_a_failed_install() {
+    let harness = Harness::new(&["cargo"]);
+    let repo = harness.local_repository("broken", &["Cargo.toml"], &[]);
+    let output = harness
+        .command(&["install", "--add", &repo])
+        .env("DTR_TEST_EXIT", "17")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(17));
+    assert!(!harness.install_all_file().exists());
+}
+
+#[test]
+fn install_all_list_uses_the_alternate_config_and_prints_reusable_commands() {
+    let harness = Harness::new(&[]);
+    let alternate = harness.work.join("alternate/install-all.toml");
+    fs::create_dir_all(alternate.parent().unwrap()).unwrap();
+    fs::write(
+        &alternate,
+        r#"
+            [[install]]
+            repospec = "~/p/my/ripgrep"
+            tool = "cargo"
+            args = ["--force", "--features", "pcre2"]
+
+            [[install]]
+            repospec = "owner/tool"
+            tool = "go"
+            no_latest = true
+
+            [[install]]
+            repospec = "./path with spaces"
+        "#,
+    )
+    .unwrap();
+
+    let output = harness.run(&["ia", "--list", "--file", alternate.to_str().unwrap()]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let home = home::home_dir().unwrap();
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "dtr install --tool cargo {}/p/my/ripgrep -- --force --features pcre2\n\
+             dtr install --tool go --no-latest owner/tool\n\
+             dtr install './path with spaces'\n",
+            home.display()
+        )
+    );
+}
+
+#[test]
+fn install_all_execution_uses_the_alternate_config() {
+    let harness = Harness::new(&["cargo"]);
+    let alternate = harness.work.join("alternate.toml");
+    fs::write(
+        &alternate,
+        "[[install]]\nrepospec = \"./alternate tool\"\ntool = \"cargo\"\n",
+    )
+    .unwrap();
+
+    let output = harness.run(&["ia", "--file", alternate.to_str().unwrap(), "--jobs", "1"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("cargo").args,
+        ["install", "--path", "./alternate tool"]
+    );
+    assert!(!harness.install_all_file().exists());
+}
+
+#[test]
+fn install_all_edit_honors_editor_precedence_and_arguments() {
+    let harness = Harness::new(&["dtr-editor", "visual-editor", "plain-editor"]);
+    let alternate = harness.work.join("nested/install-all.toml");
+    let output = harness
+        .command(&["ia", "--edit", "--file", alternate.to_str().unwrap()])
+        .env("DTR_EDITOR", "dtr-editor --wait")
+        .env("VISUAL", "visual-editor")
+        .env("EDITOR", "plain-editor")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("dtr-editor").args,
+        ["--wait", alternate.to_str().unwrap()]
+    );
+    assert!(!harness.was_invoked("visual-editor"));
+    assert!(!harness.was_invoked("plain-editor"));
+    assert!(alternate.parent().unwrap().is_dir());
+}
+
+#[test]
+fn install_all_edit_explain_is_read_only_and_falls_back_to_vim_before_vi() {
+    let explain = Harness::new(&["vim", "vi"]);
+    let alternate = explain.work.join("missing/install-all.toml");
+    let output = explain.run(&[
+        "--explain",
+        "ia",
+        "--edit",
+        "--file",
+        alternate.to_str().unwrap(),
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        format!("command:  vim {}\n", alternate.display())
+    );
+    assert!(!explain.was_invoked("vim"));
+    assert!(!explain.was_invoked("vi"));
+    assert!(!alternate.parent().unwrap().exists());
+
+    let execute = Harness::new(&["vim", "vi"]);
+    let output = execute.run(&["ia", "--edit"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(execute.was_invoked("vim"));
+    assert!(!execute.was_invoked("vi"));
+}
+
+#[test]
+fn install_all_edit_prefers_visual_over_editor() {
+    let harness = Harness::new(&["visual-editor", "plain-editor"]);
+    let output = harness
+        .command(&["ia", "--edit"])
+        .env("VISUAL", "visual-editor --foreground")
+        .env("EDITOR", "plain-editor")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("visual-editor").args,
+        ["--foreground", harness.install_all_file().to_str().unwrap()]
+    );
+    assert!(!harness.was_invoked("plain-editor"));
 }
 
 #[test]
@@ -2415,6 +2617,7 @@ fn install_help_lists_the_tool_option_and_values() {
     assert!(output.status.success(), "{}", stderr(&output));
     let help = stdout(&output);
     assert!(help.contains("-t, --tool <TOOL>"), "{help}");
+    assert!(help.contains("-a, --add"), "{help}");
     assert!(
         help.contains("[possible values: go, cargo, uv, pipx, npm, auto]"),
         "{help}"

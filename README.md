@@ -194,7 +194,7 @@ checkout is not persistently bound to that identity for later `git fetch` or
 ## Install from a repository
 
 ```text
-dtr [--explain|-n] [--narration|--no-narration] install|i [-t|--tool <tool>] [--no-latest] [<dtr-repospec>] [-- <install-arg>...]
+dtr [--explain|-n] [--narration|--no-narration] install|i [-a|--add] [-t|--tool <tool>] [--no-latest] [<dtr-repospec>] [-- <install-arg>...]
 ```
 
 `install` is deliberately repo-oriented. Dtr does not wrap the package-registry
@@ -351,15 +351,41 @@ dtr install --tool go ./my-tool
 The implementation sets the child process working directory directly; it never
 constructs a shell command.
 
+Use `--add` to install normally and then track the successful request in the
+default `install-all.toml`:
+
+```sh
+dtr install --add --tool cargo ./my-tool -- --force --features color
+```
+
+Dtr validates the existing file before starting the installer and appends a new
+`[[install]]` table only after the installer succeeds. An exact duplicate is not
+added twice. Existing comments and formatting remain intact. Local paths are
+canonicalized and stored with `~/` when they are below the user home directory;
+an automatically selected backend is recorded explicitly so later batch runs
+repeat the same installer choice. `--explain` reports the file that would be
+updated without installing or writing it.
+
 ## Install a configured repository set
 
 ```text
-dtr [--explain|-n] [--narration|--no-narration] install-all|ia [-j|--jobs <n|auto>]
+dtr [--explain|-n] [--narration|--no-narration] install-all|ia [-j|--jobs <n|auto>] [--file <FILE>]
+dtr install-all|ia --list [--file <FILE>]
+dtr [--explain|-n] install-all|ia --edit [--file <FILE>]
 ```
 
 `install-all` reads `<user-home>/.config/dtr/install-all.toml` and plans each
 `[[install]]` entry in file order. `DTR_CONFIG_DIR` overrides the containing
 directory just as it does for `config.toml`.
+
+`--file FILE` selects an alternate install-all TOML file for execution,
+listing, or editing. `--list` prints each tracked entry as a shell-safe,
+reusable `dtr install ...` command without invoking an installer. `--edit`
+launches the first configured or available editor in this order:
+`DTR_EDITOR`, `VISUAL`, `EDITOR`, `vim`, then `vi`. Environment-provided editor
+commands may contain quoted arguments, such as `DTR_EDITOR='code --wait'`. Dtr
+creates the containing directory before launching the editor. In explain mode,
+it prints the editor command without creating directories or starting it.
 
 `--jobs N` runs at most that many installs concurrently and requires a positive
 integer. The default, `--jobs auto`, uses half of the available CPU cores rounded

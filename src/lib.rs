@@ -50,6 +50,9 @@ fn run() -> Result<i32, DtrError> {
             }
             ParsedClone::Request(request) => plan_clone(*request)?,
         },
+        DtrCommand::Install(args) if args.add => {
+            return install_all::run_install_and_add(args, explain, narration_override);
+        }
         DtrCommand::Install(args) => plan_install(args)?,
         DtrCommand::InstallAll(args) => {
             return install_all::run(args, explain, narration_override);

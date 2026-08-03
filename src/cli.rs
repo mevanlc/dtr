@@ -1,9 +1,10 @@
 use std::ffi::OsString;
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -60,6 +61,10 @@ pub(crate) struct CloneArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct InstallArgs {
+    /// Add this install to install-all.toml after it succeeds
+    #[arg(short = 'a', long)]
+    pub(crate) add: bool,
+
     /// Installer to use; rust is an alias for cargo
     #[arg(short = 't', long, default_value_t = InstallTool::Auto)]
     pub(crate) tool: InstallTool,
@@ -79,8 +84,26 @@ pub(crate) struct InstallArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct InstallAllArgs {
+    /// List tracked installs as reusable dtr install commands
+    #[arg(long, conflicts_with = "edit")]
+    pub(crate) list: bool,
+
+    /// Edit the install-all configuration
+    #[arg(long, conflicts_with = "list")]
+    pub(crate) edit: bool,
+
+    /// Use an alternate install-all TOML file
+    #[arg(long, value_name = "FILE")]
+    pub(crate) file: Option<PathBuf>,
+
     /// Maximum concurrent installs; auto uses ceil(available CPU cores / 2)
-    #[arg(short = 'j', long, value_name = "n|auto", default_value_t = Jobs::Auto)]
+    #[arg(
+        short = 'j',
+        long,
+        value_name = "n|auto",
+        default_value_t = Jobs::Auto,
+        conflicts_with_all = ["list", "edit"]
+    )]
     pub(crate) jobs: Jobs,
 }
 
@@ -128,7 +151,7 @@ fn automatic_jobs(cores: usize) -> usize {
     cores.div_ceil(2).max(1)
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum InstallTool {
     Go,
@@ -242,6 +265,33 @@ mod tests {
             panic!("expected install-all command");
         };
         assert_eq!(args.jobs, Jobs::Auto);
+        assert!(!args.list);
+        assert!(!args.edit);
+        assert_eq!(args.file, None);
+    }
+
+    #[test]
+    fn install_add_and_install_all_management_options_are_accepted() {
+        let install = Cli::try_parse_from(["dtr", "install", "--add", "./tool"])
+            .expect("valid tracked install");
+        let DtrCommand::Install(args) = install.command else {
+            panic!("expected install command");
+        };
+        assert!(args.add);
+
+        for option in ["--list", "--edit"] {
+            let cli = Cli::try_parse_from(["dtr", "ia", option, "--file", "other.toml"])
+                .expect("valid install-all management command");
+            let DtrCommand::InstallAll(args) = cli.command else {
+                panic!("expected install-all command");
+            };
+            assert_eq!(args.list, option == "--list");
+            assert_eq!(args.edit, option == "--edit");
+            assert_eq!(args.file, Some(PathBuf::from("other.toml")));
+        }
+
+        assert!(Cli::try_parse_from(["dtr", "ia", "--list", "--edit"]).is_err());
+        assert!(Cli::try_parse_from(["dtr", "ia", "--list", "--jobs", "2"]).is_err());
     }
 
     #[test]

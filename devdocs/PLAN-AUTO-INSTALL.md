@@ -15,8 +15,8 @@ interface or roadmap status this increment superseded.
 Repository installation now uses one tool-valued option:
 
 ```text
-dtr [--explain|-n] install|i [-t|--tool <tool>] [<dtr-repospec>]
-dtr [--explain|-n] install|i [-t|--tool <tool>] [<dtr-repospec>] -- <installer-arg>...
+dtr [--explain|-n] install|i [-a|--add] [-t|--tool <tool>] [<dtr-repospec>]
+dtr [--explain|-n] install|i [-a|--add] [-t|--tool <tool>] [<dtr-repospec>] -- <installer-arg>...
 ```
 
 The supported values are `go`, `cargo`, `uv`, `pipx`, `npm`, and `auto`.
@@ -31,6 +31,12 @@ and execution paths as an explicit `dtr install .`.
 An explicit non-auto tool preserves the established backend mappings and skips
 repository inspection. Native installer arguments retain the existing `--`
 boundary and backend-specific safety checks.
+
+`--add` retains normal install planning and execution, then appends the exact
+successful request to the default `install-all.toml`. Local paths are stored
+canonically, auto selection is replaced by the resolved backend, exact duplicate
+entries are ignored, and existing file text is preserved. Explain mode reports
+the target without mutating it; failed installs are not tracked.
 
 Remote install sources may carry an install-only Go version query suffix, such
 as `owner/repo@v1.2.3` or
@@ -131,6 +137,7 @@ values remain absent from explain output and diagnostics.
 ```text
 src/cli.rs             InstallTool values, default, alias, and argument shape
 src/install_detect.rs  marker inference and local/API/Git root inspection
+src/install_all.rs     successful-install tracking and install-all management
 src/resolve.rs         one-time repospec/auth resolution and backend dispatch
 src/repospec.rs        inspection-safe remote normalization
 src/github_auth.rs     reusable process-scoped Git environment
@@ -158,6 +165,7 @@ remain byte-safe where the underlying platform permits non-UTF-8 paths.
 13. [x] Add install-only Go version queries without changing clone semantics.
 14. [x] Default an omitted install repository reference to the current directory.
 15. [x] Detect local Go command subdirectories through a Git-bounded ancestor module lookup.
+16. [x] Track successful installs in the install-all configuration with `--add`.
 
 ## Validation record
 
