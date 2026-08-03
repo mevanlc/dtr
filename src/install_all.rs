@@ -1,10 +1,15 @@
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 
 use serde::Deserialize;
 
-use crate::cli::{InstallArgs, InstallTool};
+use crate::cli::{InstallAllArgs, InstallArgs, InstallTool, Jobs};
+use crate::command::CommandPlan;
 use crate::config::{self, Config};
 use crate::error::DtrError;
 use crate::resolve::plan_install;
@@ -28,6 +33,12 @@ struct InstallEntry {
 
     #[serde(default)]
     args: Vec<String>,
+}
+
+struct InstallJob {
+    number: usize,
+    repospec: String,
+    plan: CommandPlan,
 }
 
 impl InstallAllConfig {
@@ -70,8 +81,14 @@ impl InstallEntry {
     }
 }
 
-pub(crate) fn run(explain: bool, narration_override: Option<bool>) -> Result<i32, DtrError> {
+pub(crate) fn run(
+    args: InstallAllArgs,
+    explain: bool,
+    narration_override: Option<bool>,
+) -> Result<i32, DtrError> {
     let config = InstallAllConfig::load()?;
+    let requested_jobs = args.jobs;
+    let job_count = requested_jobs.resolve();
     let narration = if explain {
         false
     } else {
@@ -82,6 +99,14 @@ pub(crate) fn run(explain: bool, narration_override: Option<bool>) -> Result<i32
     };
     let home = home::home_dir();
     let mut failed = false;
+    let mut jobs = Vec::new();
+
+    if explain {
+        match requested_jobs {
+            Jobs::Auto => println!("jobs: {job_count} (auto)"),
+            Jobs::Count(_) => println!("jobs: {job_count}"),
+        }
+    }
 
     for (offset, entry) in config.install.into_iter().enumerate() {
         let number = offset + 1;
@@ -97,30 +122,68 @@ pub(crate) fn run(explain: bool, narration_override: Option<bool>) -> Result<i32
         };
 
         if explain {
-            if offset > 0 {
-                println!();
-            }
+            println!();
             println!("install-all entry {number}:");
             plan.explain();
             continue;
         }
 
-        match plan.execute(narration) {
-            Ok(0) => {}
-            Ok(code) => {
-                eprintln!(
-                    "dtr: warning: install-all entry {number} ({repospec:?}) exited with status {code}"
-                );
-                failed = true;
-            }
-            Err(error) => {
-                warn_entry(number, &repospec, &error);
-                failed = true;
-            }
-        }
+        jobs.push(InstallJob {
+            number,
+            repospec,
+            plan,
+        });
+    }
+
+    if !explain && execute_jobs(jobs, job_count, narration) {
+        failed = true;
     }
 
     Ok(i32::from(failed))
+}
+
+fn execute_jobs(jobs: Vec<InstallJob>, job_count: usize, narration: bool) -> bool {
+    let worker_count = job_count.min(jobs.len());
+    let queue = Mutex::new(VecDeque::from(jobs));
+    let failed = AtomicBool::new(false);
+
+    thread::scope(|scope| {
+        for _ in 0..worker_count {
+            scope.spawn(|| {
+                loop {
+                    let job = queue
+                        .lock()
+                        .expect("install-all work queue should not be poisoned")
+                        .pop_front();
+                    let Some(job) = job else {
+                        break;
+                    };
+                    if !execute_job(&job, narration) {
+                        failed.store(true, Ordering::Relaxed);
+                    }
+                }
+            });
+        }
+    });
+
+    failed.load(Ordering::Relaxed)
+}
+
+fn execute_job(job: &InstallJob, narration: bool) -> bool {
+    match job.plan.execute(narration) {
+        Ok(0) => true,
+        Ok(code) => {
+            eprintln!(
+                "dtr: warning: install-all entry {} ({:?}) exited with status {code}",
+                job.number, job.repospec
+            );
+            false
+        }
+        Err(error) => {
+            warn_entry(job.number, &job.repospec, &error);
+            false
+        }
+    }
 }
 
 fn expand_home(repospec: String, home: Option<&Path>) -> Result<OsString, DtrError> {

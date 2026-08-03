@@ -354,12 +354,19 @@ constructs a shell command.
 ## Install a configured repository set
 
 ```text
-dtr [--explain|-n] [--narration|--no-narration] install-all|ia
+dtr [--explain|-n] [--narration|--no-narration] install-all|ia [-j|--jobs <n|auto>]
 ```
 
-`install-all` reads `<user-home>/.config/dtr/install-all.toml` and installs each
+`install-all` reads `<user-home>/.config/dtr/install-all.toml` and plans each
 `[[install]]` entry in file order. `DTR_CONFIG_DIR` overrides the containing
 directory just as it does for `config.toml`.
+
+`--jobs N` runs at most that many installs concurrently and requires a positive
+integer. The default, `--jobs auto`, uses half of the available CPU cores rounded
+up: `ceil(cores / 2)`, with a minimum of one job. Entries enter the bounded work
+queue in configuration order, while process starts, native installer output, and
+completion order can differ. Native output can therefore interleave when more
+than one job runs.
 
 Each entry requires `repospec`. It accepts the same repository references as
 `dtr install`, plus a leading `~/` for a path below the user home directory.
@@ -386,7 +393,7 @@ Malformed or missing configuration is a fatal error. Once the file has been
 loaded, an entry that cannot be planned, started, or completed emits a warning;
 dtr continues with the remaining entries and exits with status 1 after any such
 failure. Native installer output is left visible. Use `dtr --explain ia` to
-resolve and print every plan without running an installer.
+print the resolved job count and every plan without running an installer.
 
 ## Execution narration
 

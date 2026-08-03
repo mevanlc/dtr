@@ -1,4 +1,6 @@
 use std::ffi::OsString;
+use std::num::NonZeroUsize;
+use std::str::FromStr;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Deserialize;
@@ -39,7 +41,7 @@ pub(crate) enum DtrCommand {
 
     /// Install every repository configured in install-all.toml
     #[command(visible_alias = "ia")]
-    InstallAll,
+    InstallAll(InstallAllArgs),
 
     /// Read or change dtr configuration
     #[command(
@@ -73,6 +75,57 @@ pub(crate) struct InstallArgs {
     /// Native installer arguments, following --
     #[arg(last = true, value_name = "INSTALL_ARG", num_args = 0..)]
     pub(crate) install_args: Vec<OsString>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct InstallAllArgs {
+    /// Maximum concurrent installs; auto uses ceil(available CPU cores / 2)
+    #[arg(short = 'j', long, value_name = "n|auto", default_value_t = Jobs::Auto)]
+    pub(crate) jobs: Jobs,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum Jobs {
+    #[default]
+    Auto,
+    Count(NonZeroUsize),
+}
+
+impl Jobs {
+    pub(crate) fn resolve(self) -> usize {
+        match self {
+            Self::Auto => {
+                automatic_jobs(std::thread::available_parallelism().map_or(1, NonZeroUsize::get))
+            }
+            Self::Count(jobs) => jobs.get(),
+        }
+    }
+}
+
+impl std::fmt::Display for Jobs {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => formatter.write_str("auto"),
+            Self::Count(jobs) => jobs.fmt(formatter),
+        }
+    }
+}
+
+impl FromStr for Jobs {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value == "auto" {
+            return Ok(Self::Auto);
+        }
+        value.parse::<NonZeroUsize>().map(Self::Count).map_err(|_| {
+            format!("invalid jobs value {value:?}; expected 'auto' or a positive integer")
+        })
+    }
+}
+
+fn automatic_jobs(cores: usize) -> usize {
+    cores.div_ceil(2).max(1)
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, ValueEnum)]
@@ -185,7 +238,40 @@ mod tests {
     #[test]
     fn install_all_alias_is_accepted() {
         let cli = Cli::try_parse_from(["dtr", "ia"]).expect("valid install-all command");
-        assert!(matches!(cli.command, DtrCommand::InstallAll));
+        let DtrCommand::InstallAll(args) = cli.command else {
+            panic!("expected install-all command");
+        };
+        assert_eq!(args.jobs, Jobs::Auto);
+    }
+
+    #[test]
+    fn install_all_jobs_accepts_positive_counts_and_auto() {
+        for (value, expected) in [
+            ("auto", Jobs::Auto),
+            ("1", Jobs::Count(NonZeroUsize::new(1).unwrap())),
+            ("17", Jobs::Count(NonZeroUsize::new(17).unwrap())),
+        ] {
+            let cli =
+                Cli::try_parse_from(["dtr", "ia", "--jobs", value]).expect("valid jobs value");
+            let DtrCommand::InstallAll(args) = cli.command else {
+                panic!("expected install-all command");
+            };
+            assert_eq!(args.jobs, expected);
+        }
+
+        for value in ["0", "-1", "all", "1.5"] {
+            assert!(
+                Cli::try_parse_from(["dtr", "ia", "-j", value]).is_err(),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_jobs_is_half_the_core_count_rounded_up() {
+        for (cores, jobs) in [(0, 1), (1, 1), (2, 1), (3, 2), (4, 2), (5, 3), (32, 16)] {
+            assert_eq!(automatic_jobs(cores), jobs, "{cores} cores");
+        }
     }
 
     #[test]

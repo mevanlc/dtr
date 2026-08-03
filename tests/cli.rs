@@ -307,6 +307,26 @@ if [ "${0##*/}" = go ] && [ "${1-}" = env ]; then
   exit "${DTR_TEST_GO_ENV_EXIT-0}"
 fi
 
+if [ -n "${DTR_TEST_PARALLEL_BARRIER-}" ]; then
+  parallel_log="${DTR_TEST_LOG_DIR}/parallel-starts"
+  printf 'start\n' >> "$parallel_log"
+  attempts=0
+  while :; do
+    started=0
+    while IFS= read -r marker; do
+      started=$((started + 1))
+    done < "$parallel_log"
+    if [ "$started" -ge "$DTR_TEST_PARALLEL_BARRIER" ]; then
+      break
+    fi
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 200 ]; then
+      exit 98
+    fi
+    /bin/sleep 0.01
+  done
+fi
+
 log="${DTR_TEST_LOG_DIR}/${0##*/}"
 : > "$log"
 printf 'cwd=<%s>\n' "$PWD" >> "$log"
@@ -578,9 +598,10 @@ fn install_all_explain_prints_every_plan_without_running_installers() {
         cargo_repo = cargo_repo.display().to_string(),
     ));
 
-    let output = harness.run(&["--explain", "ia"]);
+    let output = harness.run(&["--explain", "ia", "--jobs", "3"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let output_text = stdout(&output);
+    assert!(output_text.starts_with("jobs: 3\n\n"), "{output_text}");
     assert!(
         output_text.contains("install-all entry 1:"),
         "{output_text}"
@@ -593,6 +614,51 @@ fn install_all_explain_prints_every_plan_without_running_installers() {
         "{output_text}"
     );
     assert!(!harness.was_invoked("cargo"));
+}
+
+#[test]
+fn install_all_jobs_runs_multiple_installers_concurrently() {
+    let harness = Harness::new(&["cargo"]);
+    harness.write_install_all(
+        r#"
+            [[install]]
+            repospec = "./one"
+            tool = "cargo"
+
+            [[install]]
+            repospec = "./two"
+            tool = "cargo"
+        "#,
+    );
+
+    let output = harness
+        .command(&["ia", "-j", "2"])
+        .env("DTR_TEST_PARALLEL_BARRIER", "2")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        fs::read_to_string(harness.log.join("parallel-starts")).unwrap(),
+        "start\nstart\n"
+    );
+}
+
+#[test]
+fn install_all_jobs_help_and_zero_validation_are_explicit() {
+    let harness = Harness::new(&[]);
+    let help = harness.run(&["ia", "--help"]);
+    assert!(help.status.success(), "{}", stderr(&help));
+    let help_text = stdout(&help);
+    assert!(help_text.contains("-j, --jobs <n|auto>"), "{help_text}");
+    assert!(help_text.contains("[default: auto]"), "{help_text}");
+    assert!(
+        help_text.contains("ceil(available CPU cores / 2)"),
+        "{help_text}"
+    );
+
+    let zero = harness.run(&["ia", "--jobs", "0"]);
+    assert_eq!(zero.status.code(), Some(2));
+    assert!(stderr(&zero).contains("expected 'auto' or a positive integer"));
 }
 
 #[test]
