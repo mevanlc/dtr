@@ -420,11 +420,21 @@ loaded, an entry that cannot be planned, started, or completed emits a warning;
 dtr continues with the remaining entries and exits with status 1 after any such
 failure. Native installer output is left visible. Use `dtr --explain ia` to
 print the resolved job count and every plan without running an installer.
+Enabled install-all narration remains visible while jobs run and is replayed in
+configuration order after every build and install has completed. PATH warnings
+are included in the final replay even when narration is disabled.
+On the first Ctrl-C, dtr stops dispatching queued entries while allowing active
+children to finish normally. Only after they finish does dtr replay the messages
+generated so far, immediately before exiting with status 130. A second Ctrl-C
+terminates the active child process groups, then still waits for worker cleanup
+and performs the final replay. A third Ctrl-C exits immediately without replay.
 
 ## Execution narration
 
-Clone and install operations narrate the command dtr is about to run on stderr.
-For a command that runs in a repository directory, the same line includes its
+Individual clone and install operations narrate the command dtr is about to run
+on stderr. Install-all leaves those command and success messages visible as jobs
+run, then replays them in configuration order after all jobs complete. For a
+command that runs in a repository directory, the command line includes its
 absolute working directory:
 
 ```console
@@ -450,7 +460,8 @@ warning: 'gh' is shadowed by /opt/homebrew/bin/gh (earlier on PATH)
 
 Dtr warns when a reported Go binary directory is absent from `PATH`, or when an
 earlier executable shadows an installed binary. A PATH entry that is a symlink
-to the installed binary is not treated as a shadow.
+to the installed binary is not treated as a shadow. Install-all also repeats
+these warnings in its final replay so they remain visible after native output.
 
 Use `--no-narration` to suppress dtr's command, clone-path, and install-success
 lines for one operation. Run `dtr config set narration false` for a persistent

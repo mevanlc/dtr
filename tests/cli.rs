@@ -3,8 +3,11 @@
 use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use tempfile::TempDir;
 
@@ -359,6 +362,19 @@ esac
 for arg in "$@"; do
   printf 'arg=<%s>\n' "$arg" >> "$log"
 done
+if [ -n "${DTR_TEST_CHILD_STDERR-}" ]; then
+  printf '%s\n' "$DTR_TEST_CHILD_STDERR" >&2
+fi
+if [ "${DTR_TEST_INTERRUPT_PROGRAM-}" = "${0##*/}" ]; then
+  printf '%s\n' "$$" > "${DTR_TEST_LOG_DIR}/active-child-pid"
+  : > "${DTR_TEST_LOG_DIR}/signal-ready"
+  while [ ! -e "${DTR_TEST_LOG_DIR}/release-running-job" ]; do
+    /bin/sleep 0.01
+  done
+  if [ -n "${DTR_TEST_POST_INTERRUPT_STDERR-}" ]; then
+    printf '%s\n' "$DTR_TEST_POST_INTERRUPT_STDERR" >&2
+  fi
+fi
 exit "${DTR_TEST_EXIT-0}"
 "#;
     fs::write(path, script).unwrap();
@@ -640,6 +656,262 @@ fn install_all_jobs_runs_multiple_installers_concurrently() {
     assert_eq!(
         fs::read_to_string(harness.log.join("parallel-starts")).unwrap(),
         "start\nstart\n"
+    );
+}
+
+#[test]
+fn install_all_replays_narration_after_all_native_child_output() {
+    let harness = Harness::new(&["cargo"]);
+    harness.write_install_all(
+        r#"
+            [[install]]
+            repospec = "./one"
+            tool = "cargo"
+
+            [[install]]
+            repospec = "./two"
+            tool = "cargo"
+        "#,
+    );
+
+    let output = harness
+        .command(&["ia", "--jobs", "2"])
+        .env("DTR_TEST_CHILD_STDERR", "native child output")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let stderr = stderr(&output);
+    assert_eq!(
+        stderr.matches("native child output\n").count(),
+        2,
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("→ cargo install --path ./one\n").count(),
+        2,
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("→ cargo install --path ./two\n").count(),
+        2,
+        "{stderr}"
+    );
+    assert!(
+        stderr.ends_with(
+            "→ cargo install --path ./one\n\
+             → cargo install --path ./two\n"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.rfind("native child output").unwrap()
+            < stderr.rfind("→ cargo install --path ./one").unwrap(),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn install_all_replays_path_warnings_when_narration_is_disabled() {
+    let harness = Harness::new(&["go"]);
+    let install_directory = harness.work.join("go-bin");
+    fs::create_dir(&install_directory).unwrap();
+    write_executable(&install_directory.join("tool"));
+    write_executable(&harness.bin.join("tool"));
+    let path = env::join_paths([harness.bin.as_path(), install_directory.as_path()]).unwrap();
+    harness.write_install_all(
+        r#"
+            [[install]]
+            repospec = "owner/tool"
+            tool = "go"
+        "#,
+    );
+
+    let output = harness
+        .command(&["--no-narration", "ia"])
+        .env("PATH", path)
+        .env("DTR_TEST_GO_GOBIN", &install_directory)
+        .env("DTR_TEST_CHILD_STDERR", "native child output")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let warning = format!(
+        "warning: 'tool' is shadowed by {} (earlier on PATH)",
+        harness.bin.join("tool").display()
+    );
+    let stderr = stderr(&output);
+    assert_eq!(stderr.matches(&warning).count(), 2, "{stderr}");
+    assert!(!stderr.contains("→ go install"), "{stderr}");
+    assert!(stderr.ends_with(&format!("{warning}\n")), "{stderr}");
+}
+
+#[test]
+fn install_all_ctrl_c_allows_started_jobs_to_finish_then_replays_and_exits_130() {
+    let harness = Harness::new(&["cargo", "npm", "uv"]);
+    harness.write_install_all(
+        r#"
+            [[install]]
+            repospec = "./finished"
+            tool = "cargo"
+
+            [[install]]
+            repospec = "./finishing"
+            tool = "npm"
+
+            [[install]]
+            repospec = "./not-started"
+            tool = "uv"
+        "#,
+    );
+
+    let mut command = harness.command(&["ia", "--jobs", "1"]);
+    command
+        .env("DTR_TEST_CHILD_STDERR", "native child output")
+        .env(
+            "DTR_TEST_POST_INTERRUPT_STDERR",
+            "post-interrupt installation chatter",
+        )
+        .env("DTR_TEST_INTERRUPT_PROGRAM", "npm")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let child = command.spawn().unwrap();
+    let process_group = i32::try_from(child.id()).unwrap();
+    let ready = harness.log.join("signal-ready");
+    for _ in 0..500 {
+        if ready.exists() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    if !ready.exists() {
+        unsafe {
+            libc::kill(-process_group, libc::SIGKILL);
+        }
+        let output = child.wait_with_output().unwrap();
+        panic!(
+            "timed out waiting for interrupt target: {}",
+            stderr(&output)
+        );
+    }
+
+    assert_eq!(unsafe { libc::kill(-process_group, libc::SIGINT) }, 0);
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(unsafe { libc::kill(-process_group, 0) }, 0);
+    assert!(!harness.was_invoked("uv"));
+    fs::write(harness.log.join("release-running-job"), []).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(130), "{}", stderr(&output));
+    assert!(!harness.was_invoked("uv"));
+    let stderr = stderr(&output);
+    assert_eq!(
+        stderr
+            .matches("→ cargo install --path ./finished\n")
+            .count(),
+        2,
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr
+            .matches("→ npm install --global -- ./finishing\n")
+            .count(),
+        2,
+        "{stderr}"
+    );
+    assert!(
+        stderr.ends_with(
+            "→ cargo install --path ./finished\n\
+             → npm install --global -- ./finishing\n"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr
+            .matches("post-interrupt installation chatter\n")
+            .count(),
+        1,
+        "{stderr}"
+    );
+    assert!(
+        stderr.find("post-interrupt installation chatter").unwrap()
+            < stderr.rfind("→ cargo install --path ./finished").unwrap(),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("exited with status"), "{stderr}");
+}
+
+#[test]
+fn install_all_second_ctrl_c_terminates_active_child_groups_and_exits_130() {
+    let harness = Harness::new(&["npm"]);
+    harness.write_install_all(
+        r#"
+            [[install]]
+            repospec = "./running"
+            tool = "npm"
+        "#,
+    );
+
+    let mut command = harness.command(&["ia", "--jobs", "1"]);
+    command
+        .env("DTR_TEST_INTERRUPT_PROGRAM", "npm")
+        .env("DTR_TEST_CHILD_STDERR", "native child output")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let child = command.spawn().unwrap();
+    let dtr_process_group = i32::try_from(child.id()).unwrap();
+    let ready = harness.log.join("signal-ready");
+    for _ in 0..500 {
+        if ready.exists() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    if !ready.exists() {
+        unsafe {
+            libc::kill(-dtr_process_group, libc::SIGKILL);
+        }
+        let output = child.wait_with_output().unwrap();
+        panic!(
+            "timed out waiting for interrupt target: {}",
+            stderr(&output)
+        );
+    }
+    let active_child_group: i32 = fs::read_to_string(harness.log.join("active-child-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+
+    assert_eq!(unsafe { libc::kill(-dtr_process_group, libc::SIGINT) }, 0);
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(unsafe { libc::kill(-dtr_process_group, 0) }, 0);
+    assert_eq!(unsafe { libc::kill(-active_child_group, 0) }, 0);
+    assert_eq!(unsafe { libc::kill(-dtr_process_group, libc::SIGINT) }, 0);
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    thread::spawn(move || sender.send(child.wait_with_output()).unwrap());
+    let output = match receiver.recv_timeout(Duration::from_secs(5)) {
+        Ok(output) => output.unwrap(),
+        Err(error) => {
+            unsafe {
+                libc::kill(-dtr_process_group, libc::SIGKILL);
+                libc::kill(-active_child_group, libc::SIGKILL);
+            }
+            panic!("timed out waiting for forced Ctrl-C exit: {error}");
+        }
+    };
+    assert_eq!(output.status.code(), Some(130), "{}", stderr(&output));
+    let stderr = stderr(&output);
+    assert_eq!(
+        stderr
+            .matches("→ npm install --global -- ./running\n")
+            .count(),
+        2,
+        "{stderr}"
+    );
+    assert!(
+        stderr.ends_with("→ npm install --global -- ./running\n"),
+        "{stderr}"
     );
 }
 

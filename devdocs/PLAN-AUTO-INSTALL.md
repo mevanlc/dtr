@@ -38,6 +38,17 @@ canonically, auto selection is replaced by the resolved backend, exact duplicate
 entries are ignored, and existing file text is preserved. Explain mode reports
 the target without mutating it; failed installs are not tracked.
 
+Install-all retains native child output and immediate narration while jobs run,
+then replays dtr command, install-success, and warning messages in configuration
+order after all jobs complete. PATH warnings are replayed even when narration is
+disabled.
+
+The first Ctrl-C stops new job dispatch while allowing active child processes to
+finish normally. Dtr emits the accumulated replay only after they finish,
+immediately before exiting 130. A second Ctrl-C terminates the active child
+process groups, then still joins workers and performs the final replay. A third
+Ctrl-C forces an immediate status-130 exit without replay.
+
 Remote install sources may carry an install-only Go version query suffix, such
 as `owner/repo@v1.2.3` or
 `https://github.com/owner/repo@feature-branch`. Dtr separates the query from the

@@ -4,15 +4,14 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::{self, Command};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{InstallAllArgs, InstallArgs, InstallTool, Jobs};
-use crate::command::{CommandPlan, command_exists, shell_quote};
+use crate::command::{CommandPlan, DtrMessage, InterruptState, command_exists, shell_quote};
 use crate::config::{self, Config};
 use crate::error::DtrError;
 use crate::repospec::InstallSource;
@@ -49,6 +48,17 @@ struct InstallJob {
     number: usize,
     repospec: String,
     plan: CommandPlan,
+}
+
+struct InstallJobResult {
+    number: usize,
+    succeeded: bool,
+    messages: Vec<DtrMessage>,
+}
+
+struct InstallAllExecution {
+    failed: bool,
+    interrupted: bool,
 }
 
 impl InstallEntry {
@@ -135,9 +145,15 @@ pub(crate) fn run(
             None => Config::load_for_runtime()?.narration(),
         }
     };
+    let interrupted = if explain {
+        None
+    } else {
+        Some(install_interrupt_handler()?)
+    };
     let home = home::home_dir();
     let mut failed = false;
     let mut jobs = Vec::new();
+    let mut preflight_results = Vec::new();
 
     if explain {
         match requested_jobs {
@@ -147,13 +163,33 @@ pub(crate) fn run(
     }
 
     for (offset, entry) in config.install.into_iter().enumerate() {
+        if interrupted
+            .as_ref()
+            .is_some_and(|interrupted| interrupted.is_interrupted())
+        {
+            break;
+        }
         let number = offset + 1;
         let repospec = entry.repospec.clone();
         let plan = entry.into_args(home.as_deref()).and_then(plan_install);
+        if interrupted
+            .as_ref()
+            .is_some_and(|interrupted| interrupted.is_interrupted())
+        {
+            break;
+        }
         let plan = match plan {
             Ok(plan) => plan,
             Err(error) => {
-                warn_entry(number, &repospec, &error);
+                let warning = entry_warning(number, &repospec, &error);
+                eprintln!("{warning}");
+                if !explain {
+                    preflight_results.push(InstallJobResult {
+                        number,
+                        succeeded: false,
+                        messages: vec![DtrMessage::Stderr(warning)],
+                    });
+                }
                 failed = true;
                 continue;
             }
@@ -173,8 +209,22 @@ pub(crate) fn run(
         });
     }
 
-    if !explain && execute_jobs(jobs, job_count, narration) {
-        failed = true;
+    if !explain {
+        let execution = execute_jobs(
+            jobs,
+            job_count,
+            narration,
+            preflight_results,
+            interrupted
+                .as_deref()
+                .expect("live install-all runs install an interrupt handler"),
+        );
+        if execution.interrupted {
+            return Ok(130);
+        }
+        if execution.failed {
+            failed = true;
+        }
     }
 
     Ok(i32::from(failed))
@@ -229,15 +279,24 @@ pub(crate) fn run_install_and_add(
     Ok(0)
 }
 
-fn execute_jobs(jobs: Vec<InstallJob>, job_count: usize, narration: bool) -> bool {
+fn execute_jobs(
+    jobs: Vec<InstallJob>,
+    job_count: usize,
+    narration: bool,
+    initial_results: Vec<InstallJobResult>,
+    interrupted: &InterruptState,
+) -> InstallAllExecution {
     let worker_count = job_count.min(jobs.len());
     let queue = Mutex::new(VecDeque::from(jobs));
-    let failed = AtomicBool::new(false);
+    let results = Mutex::new(initial_results);
 
     thread::scope(|scope| {
         for _ in 0..worker_count {
             scope.spawn(|| {
                 loop {
+                    if interrupted.is_interrupted() {
+                        break;
+                    }
                     let job = queue
                         .lock()
                         .expect("install-all work queue should not be poisoned")
@@ -245,32 +304,87 @@ fn execute_jobs(jobs: Vec<InstallJob>, job_count: usize, narration: bool) -> boo
                     let Some(job) = job else {
                         break;
                     };
-                    if !execute_job(&job, narration) {
-                        failed.store(true, Ordering::Relaxed);
+                    if interrupted.is_interrupted() {
+                        break;
                     }
+                    let result = execute_job(&job, narration, interrupted);
+                    results
+                        .lock()
+                        .expect("install-all results should not be poisoned")
+                        .push(result);
                 }
             });
         }
     });
 
-    failed.load(Ordering::Relaxed)
-}
-
-fn execute_job(job: &InstallJob, narration: bool) -> bool {
-    match job.plan.execute(narration) {
-        Ok(0) => true,
-        Ok(code) => {
-            eprintln!(
-                "dtr: warning: install-all entry {} ({:?}) exited with status {code}",
-                job.number, job.repospec
-            );
-            false
-        }
-        Err(error) => {
-            warn_entry(job.number, &job.repospec, &error);
-            false
+    let mut results = results
+        .into_inner()
+        .expect("install-all results should not be poisoned");
+    results.sort_by_key(|result| result.number);
+    let failed = results.iter().any(|result| !result.succeeded);
+    for result in results {
+        for message in result.messages {
+            message.emit();
         }
     }
+    InstallAllExecution {
+        failed,
+        interrupted: interrupted.is_interrupted(),
+    }
+}
+
+fn execute_job(
+    job: &InstallJob,
+    narration: bool,
+    interrupted: &InterruptState,
+) -> InstallJobResult {
+    let mut messages = Vec::new();
+    let execution = job
+        .plan
+        .execute_with_replay(narration, &mut messages, interrupted);
+    let succeeded = if interrupted.is_interrupted() {
+        false
+    } else {
+        match execution {
+            Ok(0) => true,
+            Ok(code) => {
+                let warning = format!(
+                    "dtr: warning: install-all entry {} ({:?}) exited with status {code}",
+                    job.number, job.repospec
+                );
+                eprintln!("{warning}");
+                messages.push(DtrMessage::Stderr(warning));
+                false
+            }
+            Err(error) => {
+                let warning = entry_warning(job.number, &job.repospec, &error);
+                eprintln!("{warning}");
+                messages.push(DtrMessage::Stderr(warning));
+                false
+            }
+        }
+    };
+    InstallJobResult {
+        number: job.number,
+        succeeded,
+        messages,
+    }
+}
+
+fn install_interrupt_handler() -> Result<Arc<InterruptState>, DtrError> {
+    let interrupted = Arc::new(InterruptState::new());
+    let handler_state = Arc::clone(&interrupted);
+    ctrlc::set_handler(move || match handler_state.request_interrupt() {
+        0 => {}
+        1 => {
+            handler_state.stop_active_children();
+        }
+        _ => {
+            process::exit(130);
+        }
+    })
+    .map_err(|error| DtrError::new(format!("could not install Ctrl-C handler: {error}")))?;
+    Ok(interrupted)
 }
 
 fn selected_file_path(alternate: Option<PathBuf>) -> Result<PathBuf, DtrError> {
@@ -543,8 +657,8 @@ fn expand_home(repospec: String, home: Option<&Path>) -> Result<OsString, DtrErr
     Ok(home.join(suffix).into_os_string())
 }
 
-fn warn_entry(number: usize, repospec: &str, error: &DtrError) {
-    eprintln!("dtr: warning: install-all entry {number} ({repospec:?}): {error}");
+fn entry_warning(number: usize, repospec: &str, error: &DtrError) -> String {
+    format!("dtr: warning: install-all entry {number} ({repospec:?}): {error}")
 }
 
 #[cfg(test)]

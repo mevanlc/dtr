@@ -1,8 +1,15 @@
+#[cfg(unix)]
+use std::collections::HashSet;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output};
+#[cfg(unix)]
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::DtrError;
 
@@ -36,6 +43,128 @@ pub(crate) struct SecretEnvironment {
     value: OsString,
 }
 
+pub(crate) struct InterruptState {
+    interrupt_count: AtomicUsize,
+    #[cfg(unix)]
+    active_process_groups: Mutex<HashSet<u32>>,
+}
+
+impl InterruptState {
+    pub(crate) fn new() -> Self {
+        Self {
+            interrupt_count: AtomicUsize::new(0),
+            #[cfg(unix)]
+            active_process_groups: Mutex::new(HashSet::new()),
+        }
+    }
+
+    pub(crate) fn request_interrupt(&self) -> usize {
+        self.interrupt_count.fetch_add(1, Ordering::SeqCst)
+    }
+
+    pub(crate) fn is_interrupted(&self) -> bool {
+        self.interrupt_count.load(Ordering::Acquire) != 0
+    }
+
+    pub(crate) fn stop_active_children(&self) {
+        #[cfg(unix)]
+        for process_group in self
+            .active_process_groups
+            .lock()
+            .expect("active child process groups should not be poisoned")
+            .iter()
+            .copied()
+        {
+            stop_process_group(process_group);
+        }
+    }
+
+    fn configure_command(&self, command: &mut Command) {
+        #[cfg(unix)]
+        command.process_group(0);
+    }
+
+    fn register_child(&self, child: &Child) {
+        #[cfg(unix)]
+        self.active_process_groups
+            .lock()
+            .expect("active child process groups should not be poisoned")
+            .insert(child.id());
+    }
+
+    fn unregister_child(&self, child: &Child) {
+        #[cfg(unix)]
+        self.active_process_groups
+            .lock()
+            .expect("active child process groups should not be poisoned")
+            .remove(&child.id());
+    }
+
+    fn stop_child(&self, child: &mut Child) {
+        #[cfg(unix)]
+        stop_process_group(child.id());
+        #[cfg(not(unix))]
+        let _ = child.kill();
+    }
+}
+
+#[cfg(unix)]
+fn stop_process_group(process_group: u32) {
+    if let Ok(process_group) = i32::try_from(process_group) {
+        unsafe {
+            libc::kill(-process_group, libc::SIGKILL);
+        }
+    }
+}
+
+pub(crate) enum DtrMessage {
+    Stdout(String),
+    Stderr(String),
+}
+
+impl DtrMessage {
+    pub(crate) fn emit(&self) {
+        match self {
+            Self::Stdout(message) => println!("{message}"),
+            Self::Stderr(message) => eprintln!("{message}"),
+        }
+    }
+}
+
+struct MessageSink<'a> {
+    narration: bool,
+    replay: Option<&'a mut Vec<DtrMessage>>,
+}
+
+impl MessageSink<'_> {
+    fn narration_enabled(&self) -> bool {
+        self.narration
+    }
+
+    fn emit_and_replay(&mut self, message: DtrMessage) {
+        message.emit();
+        if let Some(replay) = &mut self.replay {
+            replay.push(message);
+        }
+    }
+
+    fn narrate_stdout(&mut self, message: String) {
+        if self.narration {
+            self.emit_and_replay(DtrMessage::Stdout(message));
+        }
+    }
+
+    fn narrate_stderr(&mut self, message: String) {
+        if self.narration {
+            self.emit_and_replay(DtrMessage::Stderr(message));
+        }
+    }
+
+    fn warn_stderr(&mut self, message: String) {
+        self.emit_and_replay(DtrMessage::Stderr(message));
+    }
+}
+
 impl SecretEnvironment {
     pub(crate) fn new(name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
         Self {
@@ -65,6 +194,31 @@ impl CommandPlan {
     }
 
     pub(crate) fn execute(&self, narration: bool) -> Result<i32, DtrError> {
+        let mut messages = MessageSink {
+            narration,
+            replay: None,
+        };
+        self.execute_with_messages(&mut messages, None)
+    }
+
+    pub(crate) fn execute_with_replay(
+        &self,
+        narration: bool,
+        replay: &mut Vec<DtrMessage>,
+        interrupted: &InterruptState,
+    ) -> Result<i32, DtrError> {
+        let mut messages = MessageSink {
+            narration,
+            replay: Some(replay),
+        };
+        self.execute_with_messages(&mut messages, Some(interrupted))
+    }
+
+    fn execute_with_messages(
+        &self,
+        messages: &mut MessageSink<'_>,
+        interrupted: Option<&InterruptState>,
+    ) -> Result<i32, DtrError> {
         for directory in &self.preparations {
             fs::create_dir_all(directory).map_err(|error| {
                 DtrError::new(format!(
@@ -80,26 +234,45 @@ impl CommandPlan {
         if let Some(directory) = &self.current_dir {
             command.current_dir(directory);
         }
-        if narration {
+        if let Some(interrupted) = interrupted {
+            interrupted.configure_command(&mut command);
+        }
+        if messages.narration_enabled() {
             if let Some(directory) = &self.current_dir {
-                eprintln!(
+                messages.narrate_stderr(format!(
                     "→ {} (in {})",
                     self.render_command(),
                     shell_quote(absolute_path(directory).as_os_str())
-                );
+                ));
             } else {
-                eprintln!("→ {}", self.render_command());
+                messages.narrate_stderr(format!("→ {}", self.render_command()));
             }
         }
-        let status = command.status().map_err(|error| {
+        let mut child = command.spawn().map_err(|error| {
             DtrError::new(format!(
                 "could not start {}: {error}",
                 self.program.to_string_lossy()
             ))
         })?;
+        if let Some(interrupted) = interrupted {
+            interrupted.register_child(&child);
+            if interrupted.is_interrupted() {
+                interrupted.stop_child(&mut child);
+            }
+        }
+        let status = child.wait();
+        if let Some(interrupted) = interrupted {
+            interrupted.unregister_child(&child);
+        }
+        let status = status.map_err(|error| {
+            DtrError::new(format!(
+                "could not wait for {}: {error}",
+                self.program.to_string_lossy()
+            ))
+        })?;
         let code = status.code().unwrap_or(1);
         if code == 0 {
-            self.report_success(narration);
+            self.report_success(messages);
         }
         Ok(code)
     }
@@ -112,22 +285,22 @@ impl CommandPlan {
             .join(" ")
     }
 
-    fn report_success(&self, narration: bool) {
+    fn report_success(&self, messages: &mut MessageSink<'_>) {
         match &self.kind {
             PlanKind::Clone => {
-                if narration && let Some(target) = &self.target_dir {
-                    println!("{}", absolute_path(target).display());
+                if let Some(target) = &self.target_dir {
+                    messages.narrate_stdout(absolute_path(target).display().to_string());
                 }
             }
             PlanKind::GoInstall(source) => match self.go_installed_binaries(source) {
                 Ok(binaries) => {
-                    if narration {
-                        narrate_installed_binaries(&binaries);
+                    if messages.narration_enabled() {
+                        narrate_installed_binaries(&binaries, messages);
                     }
-                    warn_about_path(&binaries);
+                    warn_about_path(&binaries, messages);
                 }
-                Err(error) if narration => {
-                    eprintln!("go install succeeded; {error}");
+                Err(error) if messages.narration_enabled() => {
+                    messages.narrate_stderr(format!("go install succeeded; {error}"));
                 }
                 Err(_) => {}
             },
@@ -208,9 +381,9 @@ fn remote_go_binary_name(import_path: &OsStr) -> Option<&str> {
     }
 }
 
-fn narrate_installed_binaries(binaries: &[PathBuf]) {
+fn narrate_installed_binaries(binaries: &[PathBuf], messages: &mut MessageSink<'_>) {
     if binaries.is_empty() {
-        eprintln!("go install succeeded; no binaries were reported");
+        messages.narrate_stderr("go install succeeded; no binaries were reported".to_owned());
         return;
     }
 
@@ -225,18 +398,18 @@ fn narrate_installed_binaries(binaries: &[PathBuf]) {
             .map(|name| name.to_string_lossy())
             .collect::<Vec<_>>()
             .join(", ");
-        eprintln!("installed: {names} → {}", directory.display());
+        messages.narrate_stderr(format!("installed: {names} → {}", directory.display()));
     } else {
         for binary in binaries {
-            eprintln!("installed: {}", binary.display());
+            messages.narrate_stderr(format!("installed: {}", binary.display()));
         }
     }
 }
 
-fn warn_about_path(binaries: &[PathBuf]) {
+fn warn_about_path(binaries: &[PathBuf], messages: &mut MessageSink<'_>) {
     let Some(path) = env::var_os("PATH") else {
         for directory in unique_binary_directories(binaries) {
-            eprintln!("warning: {} is not on PATH", directory.display());
+            messages.warn_stderr(format!("warning: {} is not on PATH", directory.display()));
         }
         return;
     };
@@ -247,7 +420,7 @@ fn warn_about_path(binaries: &[PathBuf]) {
             .iter()
             .position(|candidate| paths_equivalent(candidate, &directory))
         else {
-            eprintln!("warning: {} is not on PATH", directory.display());
+            messages.warn_stderr(format!("warning: {} is not on PATH", directory.display()));
             continue;
         };
 
@@ -263,11 +436,11 @@ fn warn_about_path(binaries: &[PathBuf]) {
                 .map(|directory| directory.join(name))
                 .find(|candidate| is_executable(candidate) && !paths_equivalent(candidate, binary));
             if let Some(shadow) = shadow {
-                eprintln!(
+                messages.warn_stderr(format!(
                     "warning: '{}' is shadowed by {} (earlier on PATH)",
                     name.to_string_lossy(),
                     shadow.display()
-                );
+                ));
             }
         }
     }
