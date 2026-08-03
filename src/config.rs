@@ -317,6 +317,10 @@ fn config_file_path() -> Result<PathBuf, DtrError> {
         .ok_or_else(|| DtrError::new("could not locate the user home directory"))
 }
 
+pub(crate) fn install_all_file_path() -> Result<PathBuf, DtrError> {
+    Ok(config_file_path()?.with_file_name("install-all.toml"))
+}
+
 fn discover_config_file_path() -> Result<Option<PathBuf>, DtrError> {
     let dtr_config_dir = env::var_os("DTR_CONFIG_DIR");
     let home = home::home_dir();

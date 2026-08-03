@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use serde::Deserialize;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -36,6 +37,10 @@ pub(crate) enum DtrCommand {
     #[command(visible_alias = "i")]
     Install(InstallArgs),
 
+    /// Install every repository configured in install-all.toml
+    #[command(visible_alias = "ia")]
+    InstallAll,
+
     /// Read or change dtr configuration
     #[command(
         long_about = "Read or change dtr configuration.\n\nAvailable configuration keys:\n  github.auth.auto_switch\n      Comma-separated GitHub CLI account names eligible for process-scoped\n      authentication when an explicit repository owner matches.\n  narration\n      Whether dtr prints command, clone-path, and install-success narration."
@@ -70,14 +75,17 @@ pub(crate) struct InstallArgs {
     pub(crate) install_args: Vec<OsString>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, ValueEnum)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum InstallTool {
     Go,
     #[value(alias("rust"))]
+    #[serde(alias = "rust")]
     Cargo,
     Uv,
     Pipx,
     Npm,
+    #[default]
     Auto,
 }
 
@@ -172,6 +180,12 @@ mod tests {
         let cli =
             Cli::try_parse_from(["dtr", "i", "--tool", "go", "owner/repo"]).expect("valid command");
         assert!(matches!(cli.command, DtrCommand::Install(_)));
+    }
+
+    #[test]
+    fn install_all_alias_is_accepted() {
+        let cli = Cli::try_parse_from(["dtr", "ia"]).expect("valid install-all command");
+        assert!(matches!(cli.command, DtrCommand::InstallAll));
     }
 
     #[test]

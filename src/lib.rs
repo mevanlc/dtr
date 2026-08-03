@@ -4,6 +4,7 @@ mod command;
 mod config;
 mod error;
 mod github_auth;
+mod install_all;
 mod install_detect;
 mod repospec;
 mod resolve;
@@ -50,6 +51,9 @@ fn run() -> Result<i32, DtrError> {
             ParsedClone::Request(request) => plan_clone(*request)?,
         },
         DtrCommand::Install(args) => plan_install(args)?,
+        DtrCommand::InstallAll => {
+            return install_all::run(explain, narration_override);
+        }
         DtrCommand::Config(args) => {
             if explain {
                 return Err(DtrError::new("--explain does not apply to dtr config"));

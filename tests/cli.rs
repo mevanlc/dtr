@@ -124,6 +124,15 @@ impl Harness {
         self.config.join("config.toml")
     }
 
+    fn install_all_file(&self) -> PathBuf {
+        self.config.join("install-all.toml")
+    }
+
+    fn write_install_all(&self, text: &str) {
+        fs::create_dir_all(&self.config).unwrap();
+        fs::write(self.install_all_file(), text).unwrap();
+    }
+
     fn local_repository(&self, name: &str, files: &[&str], directories: &[&str]) -> String {
         let repository = self.work.join(name);
         fs::create_dir_all(&repository).unwrap();
@@ -479,6 +488,135 @@ fn config_list_prints_configured_values_or_names() {
     let names = harness.run(&["config", "list", "--name-only"]);
     assert!(names.status.success(), "{}", stderr(&names));
     assert_eq!(stdout(&names), "github.auth.auto_switch\n");
+}
+
+#[test]
+fn install_all_runs_configured_backends_and_forwards_cargo_features() {
+    let harness = Harness::new(&["cargo", "go"]);
+    let cargo_repo = harness.work.join("ripgrep");
+    let go_repo = harness.work.join("gdu/cmd/gdu");
+    fs::create_dir_all(&cargo_repo).unwrap();
+    fs::create_dir_all(&go_repo).unwrap();
+    harness.write_install_all(&format!(
+        r#"
+            [[install]]
+            repospec = {cargo_repo:?}
+            tool = "cargo"
+            args = ["--force", "--features", "pcre2"]
+
+            [[install]]
+            repospec = {go_repo:?}
+            tool = "go"
+        "#,
+        cargo_repo = cargo_repo.display().to_string(),
+        go_repo = go_repo.display().to_string(),
+    ));
+
+    let output = harness.run(&["ia"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("cargo").args,
+        [
+            "install",
+            "--path",
+            cargo_repo.to_str().unwrap(),
+            "--force",
+            "--features",
+            "pcre2",
+        ]
+    );
+    let go = harness.invocation("go");
+    assert_eq!(go.args, ["install", "./..."]);
+    assert_eq!(
+        fs::canonicalize(go.cwd).unwrap(),
+        fs::canonicalize(go_repo).unwrap()
+    );
+}
+
+#[test]
+fn install_all_warns_and_continues_after_an_entry_cannot_be_planned() {
+    let harness = Harness::new(&["cargo"]);
+    let cargo_repo = harness.work.join("working-tool");
+    fs::create_dir_all(&cargo_repo).unwrap();
+    harness.write_install_all(&format!(
+        r#"
+            [[install]]
+            repospec = "./missing"
+
+            [[install]]
+            repospec = {cargo_repo:?}
+            tool = "cargo"
+        "#,
+        cargo_repo = cargo_repo.display().to_string(),
+    ));
+
+    let output = harness.run(&["install-all"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("warning: install-all entry 1 (\"./missing\")"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        harness.invocation("cargo").args,
+        ["install", "--path", cargo_repo.to_str().unwrap()]
+    );
+}
+
+#[test]
+fn install_all_explain_prints_every_plan_without_running_installers() {
+    let harness = Harness::new(&["cargo"]);
+    let cargo_repo = harness.work.join("ripgrep");
+    fs::create_dir_all(&cargo_repo).unwrap();
+    harness.write_install_all(&format!(
+        r#"
+            [[install]]
+            repospec = {cargo_repo:?}
+            tool = "cargo"
+            args = ["--force", "--features", "pcre2"]
+        "#,
+        cargo_repo = cargo_repo.display().to_string(),
+    ));
+
+    let output = harness.run(&["--explain", "ia"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let output_text = stdout(&output);
+    assert!(
+        output_text.contains("install-all entry 1:"),
+        "{output_text}"
+    );
+    assert!(
+        output_text.contains(&format!(
+            "command:  cargo install --path {} --force --features pcre2",
+            cargo_repo.display()
+        )),
+        "{output_text}"
+    );
+    assert!(!harness.was_invoked("cargo"));
+}
+
+#[test]
+fn install_all_requires_a_valid_dedicated_configuration_file() {
+    let harness = Harness::new(&["cargo"]);
+    let missing = harness.run(&["ia"]);
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(
+        stderr(&missing).contains("could not read install-all configuration"),
+        "{}",
+        stderr(&missing)
+    );
+
+    harness.write_install_all(
+        r#"
+            [[install]]
+            repospec = "./tool"
+            feature = "pcre2"
+        "#,
+    );
+    let malformed = harness.run(&["ia"]);
+    assert_eq!(malformed.status.code(), Some(2));
+    assert!(stderr(&malformed).contains("unknown field `feature`"));
+    assert!(!harness.was_invoked("cargo"));
 }
 
 #[test]

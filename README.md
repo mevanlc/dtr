@@ -351,6 +351,43 @@ dtr install --tool go ./my-tool
 The implementation sets the child process working directory directly; it never
 constructs a shell command.
 
+## Install a configured repository set
+
+```text
+dtr [--explain|-n] [--narration|--no-narration] install-all|ia
+```
+
+`install-all` reads `<user-home>/.config/dtr/install-all.toml` and installs each
+`[[install]]` entry in file order. `DTR_CONFIG_DIR` overrides the containing
+directory just as it does for `config.toml`.
+
+Each entry requires `repospec`. It accepts the same repository references as
+`dtr install`, plus a leading `~/` for a path below the user home directory.
+`tool` defaults to `auto` and accepts the normal install tool values. `no_latest`
+defaults to `false`, and `args` is an array of native installer arguments with
+the same validation as arguments following `dtr install ... --`.
+
+For example, this rebuilds one Cargo repository with its default features and
+ripgrep with PCRE2 enabled:
+
+```toml
+[[install]]
+repospec = "~/p/my/dtr"
+tool = "cargo"
+args = ["--force"]
+
+[[install]]
+repospec = "~/p/my/ripgrep"
+tool = "cargo"
+args = ["--force", "--features", "pcre2"]
+```
+
+Malformed or missing configuration is a fatal error. Once the file has been
+loaded, an entry that cannot be planned, started, or completed emits a warning;
+dtr continues with the remaining entries and exits with status 1 after any such
+failure. Native installer output is left visible. Use `dtr --explain ia` to
+resolve and print every plan without running an installer.
+
 ## Execution narration
 
 Clone and install operations narrate the command dtr is about to run on stderr.
