@@ -5,6 +5,7 @@ use std::process::Command;
 use crate::cli::{InstallArgs, InstallTool};
 use crate::clone_args::{CloneRequest, NameMode};
 use crate::command::{CommandPlan, GoInstallSource, PlanKind, SecretEnvironment, command_exists};
+use crate::config::Config;
 use crate::error::DtrError;
 use crate::github_auth;
 use crate::github_auth::GithubAuthSelection;
@@ -411,7 +412,14 @@ fn plan_python_install(
 
     let command_args = match backend {
         PythonBackend::Uv => {
-            let mut command_args = vec!["tool".into(), "install".into(), source];
+            let mut command_args = vec![OsString::from("tool"), OsString::from("install")];
+            command_args.extend(
+                Config::load_for_runtime()?
+                    .uv_install_options()
+                    .into_iter()
+                    .map(OsString::from),
+            );
+            command_args.push(source);
             command_args.extend(args.install_args);
             command_args
         }

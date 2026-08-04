@@ -12,7 +12,16 @@ use crate::error::DtrError;
 
 pub(crate) const GITHUB_AUTO_SWITCH_KEY: &str = "github.auth.auto_switch";
 pub(crate) const NARRATION_KEY: &str = "narration";
-pub(crate) const CONFIG_KEYS: &[&str] = &[GITHUB_AUTO_SWITCH_KEY, NARRATION_KEY];
+pub(crate) const UV_INSTALL_FORCE_KEY: &str = "uv.install.force";
+pub(crate) const UV_INSTALL_EDITABLE_KEY: &str = "uv.install.editable";
+pub(crate) const UV_INSTALL_REINSTALL_KEY: &str = "uv.install.reinstall";
+pub(crate) const CONFIG_KEYS: &[&str] = &[
+    GITHUB_AUTO_SWITCH_KEY,
+    NARRATION_KEY,
+    UV_INSTALL_FORCE_KEY,
+    UV_INSTALL_EDITABLE_KEY,
+    UV_INSTALL_REINSTALL_KEY,
+];
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -22,6 +31,9 @@ pub(crate) struct Config {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     github: Option<GithubConfig>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uv: Option<UvConfig>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -36,6 +48,79 @@ struct GithubConfig {
 struct GithubAuthConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     auto_switch: Option<Vec<String>>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+struct UvConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    install: Option<UvInstallConfig>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+struct UvInstallConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    force: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    editable: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reinstall: Option<bool>,
+}
+
+/// A `uv tool install` option dtr can enable persistently.
+#[derive(Clone, Copy)]
+enum UvInstallFlag {
+    Force,
+    Editable,
+    Reinstall,
+}
+
+impl UvInstallFlag {
+    const ALL: [Self; 3] = [Self::Force, Self::Editable, Self::Reinstall];
+
+    fn from_key(key: &str) -> Option<Self> {
+        match key {
+            UV_INSTALL_FORCE_KEY => Some(Self::Force),
+            UV_INSTALL_EDITABLE_KEY => Some(Self::Editable),
+            UV_INSTALL_REINSTALL_KEY => Some(Self::Reinstall),
+            _ => None,
+        }
+    }
+
+    fn option(self) -> &'static str {
+        match self {
+            Self::Force => "--force",
+            Self::Editable => "--editable",
+            Self::Reinstall => "--reinstall",
+        }
+    }
+}
+
+impl UvInstallConfig {
+    fn value(&self, flag: UvInstallFlag) -> Option<bool> {
+        match flag {
+            UvInstallFlag::Force => self.force,
+            UvInstallFlag::Editable => self.editable,
+            UvInstallFlag::Reinstall => self.reinstall,
+        }
+    }
+
+    fn value_mut(&mut self, flag: UvInstallFlag) -> &mut Option<bool> {
+        match flag {
+            UvInstallFlag::Force => &mut self.force,
+            UvInstallFlag::Editable => &mut self.editable,
+            UvInstallFlag::Reinstall => &mut self.reinstall,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        UvInstallFlag::ALL
+            .into_iter()
+            .all(|flag| self.value(flag).is_none())
+    }
 }
 
 impl Config {
@@ -137,8 +222,57 @@ impl Config {
         self.narration.unwrap_or(true)
     }
 
+    /// The `uv tool install` options enabled by configuration, in key order.
+    pub(crate) fn uv_install_options(&self) -> Vec<&'static str> {
+        UvInstallFlag::ALL
+            .into_iter()
+            .filter(|flag| self.uv_install_flag(*flag).unwrap_or(false))
+            .map(UvInstallFlag::option)
+            .collect()
+    }
+
+    fn value(&self, key: &str) -> Option<String> {
+        match key {
+            GITHUB_AUTO_SWITCH_KEY => Some(self.auto_switch_accounts()?.join(",")),
+            NARRATION_KEY => Some(self.narration?.to_string()),
+            key => Some(
+                self.uv_install_flag(UvInstallFlag::from_key(key)?)?
+                    .to_string(),
+            ),
+        }
+    }
+
     fn auto_switch_accounts(&self) -> Option<&[String]> {
         self.github.as_ref()?.auth.as_ref()?.auto_switch.as_deref()
+    }
+
+    fn uv_install_flag(&self, flag: UvInstallFlag) -> Option<bool> {
+        self.uv.as_ref()?.install.as_ref()?.value(flag)
+    }
+
+    fn set_uv_install_flag(&mut self, flag: UvInstallFlag, value: bool) {
+        *self
+            .uv
+            .get_or_insert_with(UvConfig::default)
+            .install
+            .get_or_insert_with(UvInstallConfig::default)
+            .value_mut(flag) = Some(value);
+    }
+
+    fn unset_uv_install_flag(&mut self, flag: UvInstallFlag) {
+        let Some(uv) = &mut self.uv else {
+            return;
+        };
+        let Some(install) = &mut uv.install else {
+            return;
+        };
+        *install.value_mut(flag) = None;
+        if install.is_empty() {
+            uv.install = None;
+        }
+        if uv.install.is_none() {
+            self.uv = None;
+        }
     }
 
     fn set_auto_switch_accounts(&mut self, accounts: Vec<String>) {
@@ -196,18 +330,14 @@ pub(crate) fn run(args: ConfigArgs) -> Result<i32, DtrError> {
     match args.command {
         ConfigCommand::List(args) => {
             let config = Config::load()?;
-            if let Some(accounts) = config.auto_switch_accounts() {
+            for key in CONFIG_KEYS {
+                let Some(value) = config.value(key) else {
+                    continue;
+                };
                 if args.name_only {
-                    println!("{GITHUB_AUTO_SWITCH_KEY}");
+                    println!("{key}");
                 } else {
-                    println!("{GITHUB_AUTO_SWITCH_KEY}={}", accounts.join(","));
-                }
-            }
-            if let Some(narration) = config.narration {
-                if args.name_only {
-                    println!("{NARRATION_KEY}");
-                } else {
-                    println!("{NARRATION_KEY}={narration}");
+                    println!("{key}={value}");
                 }
             }
         }
@@ -219,31 +349,19 @@ pub(crate) fn run(args: ConfigArgs) -> Result<i32, DtrError> {
                 GITHUB_AUTO_SWITCH_KEY => {
                     config.set_auto_switch_accounts(parse_auto_switch_accounts(&args.value)?);
                 }
-                NARRATION_KEY => config.narration = Some(parse_bool(&args.value)?),
-                _ => unreachable!("known configuration key"),
+                NARRATION_KEY => config.narration = Some(parse_bool(NARRATION_KEY, &args.value)?),
+                key => {
+                    config.set_uv_install_flag(uv_install_flag(key), parse_bool(key, &args.value)?)
+                }
             }
             config.save_at(&path)?;
         }
         ConfigCommand::Get(args) => {
             require_known_key(&args.key)?;
-            let config = Config::load()?;
-            match args.key.as_str() {
-                GITHUB_AUTO_SWITCH_KEY => {
-                    let accounts = config.auto_switch_accounts().ok_or_else(|| {
-                        DtrError::new(format!(
-                            "configuration key {GITHUB_AUTO_SWITCH_KEY} is not set"
-                        ))
-                    })?;
-                    println!("{}", accounts.join(","));
-                }
-                NARRATION_KEY => {
-                    let narration = config.narration.ok_or_else(|| {
-                        DtrError::new(format!("configuration key {NARRATION_KEY} is not set"))
-                    })?;
-                    println!("{narration}");
-                }
-                _ => unreachable!("known configuration key"),
-            }
+            let value = Config::load()?.value(&args.key).ok_or_else(|| {
+                DtrError::new(format!("configuration key {} is not set", args.key))
+            })?;
+            println!("{value}");
         }
         ConfigCommand::Unset(args) => {
             require_known_key(&args.key)?;
@@ -253,7 +371,7 @@ pub(crate) fn run(args: ConfigArgs) -> Result<i32, DtrError> {
                 match args.key.as_str() {
                     GITHUB_AUTO_SWITCH_KEY => config.unset_auto_switch_accounts(),
                     NARRATION_KEY => config.narration = None,
-                    _ => unreachable!("known configuration key"),
+                    key => config.unset_uv_install_flag(uv_install_flag(key)),
                 }
                 config.save_at(&path)?;
             }
@@ -262,14 +380,16 @@ pub(crate) fn run(args: ConfigArgs) -> Result<i32, DtrError> {
     Ok(0)
 }
 
-fn parse_bool(value: &str) -> Result<bool, DtrError> {
+fn parse_bool(key: &str, value: &str) -> Result<bool, DtrError> {
     match value {
         "true" => Ok(true),
         "false" => Ok(false),
-        _ => Err(DtrError::new(format!(
-            "{NARRATION_KEY} must be true or false"
-        ))),
+        _ => Err(DtrError::new(format!("{key} must be true or false"))),
     }
+}
+
+fn uv_install_flag(key: &str) -> UvInstallFlag {
+    UvInstallFlag::from_key(key).expect("key was checked against the known configuration keys")
 }
 
 fn require_known_key(key: &str) -> Result<(), DtrError> {
@@ -365,11 +485,54 @@ mod tests {
     #[test]
     fn narration_defaults_on_and_accepts_only_boolean_values() {
         assert!(Config::default().narration());
-        assert!(parse_bool("true").unwrap());
-        assert!(!parse_bool("false").unwrap());
+        assert!(parse_bool(NARRATION_KEY, "true").unwrap());
+        assert!(!parse_bool(NARRATION_KEY, "false").unwrap());
         for value in ["", "yes", "False", "0"] {
-            assert!(parse_bool(value).is_err(), "{value:?}");
+            let error = parse_bool(NARRATION_KEY, value).expect_err(value);
+            assert_eq!(error.to_string(), "narration must be true or false");
         }
+    }
+
+    #[test]
+    fn uv_install_options_follow_key_order_and_omit_disabled_flags() {
+        let mut config = Config::default();
+        assert!(config.uv_install_options().is_empty());
+
+        for key in [
+            UV_INSTALL_REINSTALL_KEY,
+            UV_INSTALL_FORCE_KEY,
+            UV_INSTALL_EDITABLE_KEY,
+        ] {
+            config.set_uv_install_flag(uv_install_flag(key), true);
+        }
+        assert_eq!(
+            config.uv_install_options(),
+            ["--force", "--editable", "--reinstall"]
+        );
+
+        config.set_uv_install_flag(uv_install_flag(UV_INSTALL_EDITABLE_KEY), false);
+        assert_eq!(config.uv_install_options(), ["--force", "--reinstall"]);
+        assert_eq!(
+            config.value(UV_INSTALL_EDITABLE_KEY).as_deref(),
+            Some("false")
+        );
+    }
+
+    #[test]
+    fn uv_install_flags_round_trip_and_unsetting_the_last_one_drops_the_table() {
+        let mut config = Config::default();
+        config.set_uv_install_flag(uv_install_flag(UV_INSTALL_FORCE_KEY), true);
+        let encoded = toml::to_string_pretty(&config).unwrap();
+        assert_eq!(encoded, "[uv.install]\nforce = true\n");
+
+        let mut decoded: Config = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.value(UV_INSTALL_FORCE_KEY).as_deref(), Some("true"));
+        assert_eq!(decoded.value(UV_INSTALL_REINSTALL_KEY), None);
+
+        decoded.unset_uv_install_flag(uv_install_flag(UV_INSTALL_REINSTALL_KEY));
+        assert_eq!(decoded.value(UV_INSTALL_FORCE_KEY).as_deref(), Some("true"));
+        decoded.unset_uv_install_flag(uv_install_flag(UV_INSTALL_FORCE_KEY));
+        assert_eq!(toml::to_string_pretty(&decoded).unwrap(), "");
     }
 
     #[test]

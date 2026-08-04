@@ -46,7 +46,7 @@ pub(crate) enum DtrCommand {
 
     /// Read or change dtr configuration
     #[command(
-        long_about = "Read or change dtr configuration.\n\nAvailable configuration keys:\n  github.auth.auto_switch\n      Comma-separated GitHub CLI account names eligible for process-scoped\n      authentication when an explicit repository owner matches.\n  narration\n      Whether dtr prints command, clone-path, and install-success narration."
+        long_about = "Read or change dtr configuration.\n\nAvailable configuration keys:\n  github.auth.auto_switch\n      Comma-separated GitHub CLI account names eligible for process-scoped\n      authentication when an explicit repository owner matches.\n  narration\n      Whether dtr prints command, clone-path, and install-success narration.\n  uv.install.force\n      Whether uv installs receive --force.\n  uv.install.editable\n      Whether uv installs receive --editable.\n  uv.install.reinstall\n      Whether uv installs receive --reinstall."
     )]
     Config(ConfigArgs),
 }

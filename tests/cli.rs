@@ -11,6 +11,12 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 
+const UV_INSTALL_KEYS: [&str; 3] = [
+    "uv.install.force",
+    "uv.install.editable",
+    "uv.install.reinstall",
+];
+
 struct Harness {
     _temp: TempDir,
     bin: PathBuf,
@@ -455,6 +461,104 @@ fn config_set_get_list_and_unset_round_trip_narration() {
     let get = harness.run(&["config", "get", "narration"]);
     assert_eq!(get.status.code(), Some(2));
     assert!(stderr(&get).contains("is not set"));
+}
+
+#[test]
+fn config_set_get_list_and_unset_round_trip_the_uv_install_flags() {
+    let harness = Harness::new(&[]);
+    for key in UV_INSTALL_KEYS {
+        let set = harness.run(&["config", "set", key, "true"]);
+        assert!(set.status.success(), "{}", stderr(&set));
+    }
+    assert_eq!(
+        fs::read_to_string(harness.config_file()).unwrap(),
+        "[uv.install]\nforce = true\neditable = true\nreinstall = true\n"
+    );
+
+    let list = harness.run(&["config", "list"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    assert_eq!(
+        stdout(&list),
+        "uv.install.force=true\nuv.install.editable=true\nuv.install.reinstall=true\n"
+    );
+
+    let set = harness.run(&["config", "set", "uv.install.editable", "false"]);
+    assert!(set.status.success(), "{}", stderr(&set));
+    let get = harness.run(&["config", "get", "uv.install.editable"]);
+    assert!(get.status.success(), "{}", stderr(&get));
+    assert_eq!(stdout(&get), "false\n");
+
+    let invalid = harness.run(&["config", "set", "uv.install.force", "yes"]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(stderr(&invalid).contains("uv.install.force must be true or false"));
+
+    for key in UV_INSTALL_KEYS {
+        let unset = harness.run(&["config", "unset", key]);
+        assert!(unset.status.success(), "{}", stderr(&unset));
+    }
+    assert_eq!(fs::read_to_string(harness.config_file()).unwrap(), "");
+    let get = harness.run(&["config", "get", "uv.install.reinstall"]);
+    assert_eq!(get.status.code(), Some(2));
+    assert!(stderr(&get).contains("is not set"));
+}
+
+#[test]
+fn configured_uv_install_flags_precede_the_resolved_source() {
+    let harness = Harness::new(&["uv"]);
+    for (key, value) in [
+        ("uv.install.force", "true"),
+        ("uv.install.editable", "false"),
+        ("uv.install.reinstall", "true"),
+    ] {
+        let set = harness.run(&["config", "set", key, value]);
+        assert!(set.status.success(), "{}", stderr(&set));
+    }
+
+    let explain = harness.run(&["-n", "install", "--tool", "uv", "owner/tool"]);
+    assert!(explain.status.success(), "{}", stderr(&explain));
+    assert!(
+        stdout(&explain).contains(
+            "command:  uv tool install --force --reinstall \
+             git+https://github.com/owner/tool.git\n"
+        ),
+        "{}",
+        stdout(&explain)
+    );
+
+    let output = harness.run(&[
+        "install",
+        "--tool",
+        "uv",
+        "./local repo",
+        "--",
+        "--python",
+        "3.14",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("uv").args,
+        [
+            "tool",
+            "install",
+            "--force",
+            "--reinstall",
+            "./local repo",
+            "--python",
+            "3.14",
+        ]
+    );
+
+    let pipx = Harness::new(&["pipx"]);
+    for key in UV_INSTALL_KEYS {
+        let set = pipx.run(&["config", "set", key, "true"]);
+        assert!(set.status.success(), "{}", stderr(&set));
+    }
+    let output = pipx.run(&["install", "--tool", "pipx", "./local repo"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        pipx.invocation("pipx").args,
+        ["install", "--", "./local repo"]
+    );
 }
 
 #[test]

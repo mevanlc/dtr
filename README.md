@@ -179,8 +179,8 @@ dtr config unset github.auth.auto_switch
 
 Configuration is stored at `<user-home>/.config/dtr/config.toml`.
 `DTR_CONFIG_DIR` overrides the containing directory. The file may contain the
-account allowlist and narration preference; dtr never writes GitHub tokens to
-it.
+account allowlist, the narration preference, and the [uv install
+options](#backend-mappings); dtr never writes GitHub tokens to it.
 
 Clone and install operations proceed without account auto-switching when no
 configuration location can be discovered. Explicitly invalid configuration,
@@ -290,6 +290,25 @@ current pipx can install multiple positional package specs at once, dtr accepts
 only option-shaped pipx arguments and puts its one resolved source after pipx's
 own `--`. Values therefore use attached forms such as `--python=3.14`; `--lock`
 is rejected as a conflicting alternate source.
+
+Three `uv tool install` options can be enabled persistently instead of being
+repeated after `--`:
+
+```sh
+dtr config set uv.install.force true
+dtr config set uv.install.editable true
+dtr config set uv.install.reinstall true
+
+dtr install --tool uv ./my-tool
+# uv tool install --force --editable --reinstall ./my-tool
+```
+
+Each key is a boolean and defaults to false. Enabled options are placed before
+the resolved source in `force`, `editable`, `reinstall` order, ahead of anything
+forwarded after `--`. They apply to every uv install, including the uv entries of
+`install-all`, and no other backend reads them. `--editable` is a uv option for
+source directories; a remote install that receives it fails in uv rather than in
+dtr.
 
 npm repositories map to local paths or npm Git package sources, then install
 globally:
