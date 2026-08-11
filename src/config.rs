@@ -458,7 +458,9 @@ fn config_file_path_from(
         return Ok(Some(Path::new(directory).join("config.toml")));
     }
     if let Some(directory) = home {
-        return Ok(Some(directory.join(".config/dtr/config.toml")));
+        return Ok(Some(
+            directory.join(".config").join("dtr").join("config.toml"),
+        ));
     }
     Ok(None)
 }
@@ -578,6 +580,18 @@ mod tests {
         );
         assert_eq!(config_file_path_from(None, None).unwrap(), None);
         assert!(config_file_path_from(Some(OsStr::new("")), None).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn default_windows_config_path_uses_native_separators() {
+        let path = config_file_path_from(None, Some(Path::new(r"C:\Users\mclark")))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            path.to_str(),
+            Some(r"C:\Users\mclark\.config\dtr\config.toml")
+        );
     }
 
     #[test]

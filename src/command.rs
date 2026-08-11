@@ -79,25 +79,25 @@ impl InterruptState {
         }
     }
 
-    fn configure_command(&self, command: &mut Command) {
+    fn configure_command(&self, _command: &mut Command) {
         #[cfg(unix)]
-        command.process_group(0);
+        _command.process_group(0);
     }
 
-    fn register_child(&self, child: &Child) {
+    fn register_child(&self, _child: &Child) {
         #[cfg(unix)]
         self.active_process_groups
             .lock()
             .expect("active child process groups should not be poisoned")
-            .insert(child.id());
+            .insert(_child.id());
     }
 
-    fn unregister_child(&self, child: &Child) {
+    fn unregister_child(&self, _child: &Child) {
         #[cfg(unix)]
         self.active_process_groups
             .lock()
             .expect("active child process groups should not be poisoned")
-            .remove(&child.id());
+            .remove(&_child.id());
     }
 
     fn stop_child(&self, child: &mut Child) {

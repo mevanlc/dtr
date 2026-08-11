@@ -76,23 +76,35 @@ impl InstallEntry {
         })
     }
 
-    fn from_install_args(args: &InstallArgs, home: Option<&Path>) -> Result<Self, DtrError> {
+    fn from_install_args(
+        args: &InstallArgs,
+        home: Option<&Path>,
+    ) -> Result<(Self, Option<PathBuf>), DtrError> {
         let source = InstallSource::parse(&args.repospec)?;
-        let repospec = if let Some(path) = source.spec.local_path() {
+        let (repospec, local_path) = if let Some(path) = source.spec.local_path() {
             let canonical = fs::canonicalize(path).map_err(|error| {
                 DtrError::new(format!(
                     "could not resolve local repository path {} for tracking: {error}",
                     path.display()
                 ))
             })?;
-            tracked_local_path(&canonical, home)?
+            let canonical_home = home.and_then(|home| fs::canonicalize(home).ok());
+            (
+                tracked_local_path(&canonical, canonical_home.as_deref().or(home))?,
+                Some(canonical),
+            )
         } else {
-            args.repospec
-                .to_str()
-                .ok_or_else(|| {
-                    DtrError::new("install-all.toml cannot store a non-UTF-8 repository reference")
-                })?
-                .to_owned()
+            (
+                args.repospec
+                    .to_str()
+                    .ok_or_else(|| {
+                        DtrError::new(
+                            "install-all.toml cannot store a non-UTF-8 repository reference",
+                        )
+                    })?
+                    .to_owned(),
+                None,
+            )
         };
         let install_args = args
             .install_args
@@ -104,12 +116,15 @@ impl InstallEntry {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(Self {
-            repospec,
-            tool: args.tool,
-            no_latest: args.no_latest,
-            args: install_args,
-        })
+        Ok((
+            Self {
+                repospec,
+                tool: args.tool,
+                no_latest: args.no_latest,
+                args: install_args,
+            },
+            local_path,
+        ))
     }
 }
 
@@ -238,7 +253,7 @@ pub(crate) fn run_install_and_add(
     let path = config::install_all_file_path()?;
     let _ = load_optional(&path)?;
     let home = home::home_dir();
-    let mut entry = InstallEntry::from_install_args(&args, home.as_deref())?;
+    let (mut entry, local_path) = InstallEntry::from_install_args(&args, home.as_deref())?;
     let plan = plan_install(args)?;
     if entry.tool == InstallTool::Auto {
         entry.tool = backend_tool(plan.backend)?;
@@ -246,7 +261,7 @@ pub(crate) fn run_install_and_add(
 
     if explain {
         plan.explain();
-        println!("track:    {}", shell_quote(path.as_os_str()));
+        println!("track:    {}", display_path(&path));
         return Ok(0);
     }
 
@@ -266,14 +281,14 @@ pub(crate) fn run_install_and_add(
         write_atomic(&path, &text)?;
     }
     if narration {
+        let repospec = local_path
+            .as_deref()
+            .map(display_path)
+            .unwrap_or_else(|| entry.repospec.clone());
         if already_tracked {
-            eprintln!("already tracked: {}", entry.repospec);
+            eprintln!("already tracked: {repospec}");
         } else {
-            eprintln!(
-                "tracked: {} → {}",
-                entry.repospec,
-                shell_quote(path.as_os_str())
-            );
+            eprintln!("{}", tracked_message(&repospec, &path));
         }
     }
     Ok(0)
@@ -563,15 +578,41 @@ fn tracked_local_path(path: &Path, home: Option<&Path>) -> Result<String, DtrErr
             return Ok("~".to_owned());
         }
         if let Ok(suffix) = path.strip_prefix(home) {
-            let suffix = suffix.to_str().ok_or_else(|| {
-                DtrError::new("install-all.toml cannot store a non-UTF-8 local repository path")
-            })?;
+            let suffix = path_text(suffix)?;
+            #[cfg(windows)]
+            let suffix = suffix.replace('\\', "/");
             return Ok(format!("~/{suffix}"));
         }
     }
-    path.to_str().map(str::to_owned).ok_or_else(|| {
+    path_text(path)
+}
+
+fn path_text(path: &Path) -> Result<String, DtrError> {
+    path.to_str().map(friendly_windows_path).ok_or_else(|| {
         DtrError::new("install-all.toml cannot store a non-UTF-8 local repository path")
     })
+}
+
+fn display_path(path: &Path) -> String {
+    friendly_windows_path(&path.to_string_lossy())
+}
+
+fn tracked_message(repospec: &str, config_path: &Path) -> String {
+    format!("tracked: {repospec} → {}", display_path(config_path))
+}
+
+fn friendly_windows_path(path: &str) -> String {
+    #[cfg(windows)]
+    {
+        if let Some(path) = path.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{path}");
+        }
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_owned()
+    }
 }
 
 fn append_entry(mut text: String, entry: &InstallEntry) -> Result<String, DtrError> {
@@ -739,15 +780,37 @@ mod tests {
 
     #[test]
     fn listed_entries_render_as_shell_safe_install_commands() {
+        let home = Path::new("/home/user");
         let entry = InstallEntry {
             repospec: "~/p/my/tool with spaces".to_owned(),
             tool: InstallTool::Cargo,
             no_latest: false,
             args: vec!["--features".to_owned(), "pcre2".to_owned()],
         };
+        let repository = home.join("p/my/tool with spaces");
         assert_eq!(
-            render_install_command(&entry, Some(Path::new("/home/user"))).unwrap(),
-            "dtr install --tool cargo '/home/user/p/my/tool with spaces' -- --features pcre2"
+            render_install_command(&entry, Some(home)).unwrap(),
+            format!(
+                "dtr install --tool cargo {} -- --features pcre2",
+                shell_quote(repository.as_os_str())
+            )
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_tracking_narration_uses_friendly_native_paths() {
+        let repository = Path::new(r"\\?\C:\Users\mclark\p\my\gitoverit");
+        let home = Path::new(r"\\?\C:\Users\mclark");
+        let config = Path::new(r"C:\Users\mclark\.config\dtr\install-all.toml");
+
+        assert_eq!(
+            tracked_local_path(repository, Some(home)).unwrap(),
+            "~/p/my/gitoverit"
+        );
+        assert_eq!(
+            tracked_message(&display_path(repository), config),
+            r"tracked: C:\Users\mclark\p\my\gitoverit → C:\Users\mclark\.config\dtr\install-all.toml"
         );
     }
 }
