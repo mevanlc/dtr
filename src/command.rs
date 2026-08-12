@@ -190,13 +190,13 @@ impl CommandPlan {
             println!("auth:     {auth}");
         }
         if let Some(directory) = &self.current_dir {
-            println!("directory: {}", shell_quote(directory.as_os_str()));
+            println!("directory: {}", shell_quote_path(directory));
         }
         if let Some(target) = &self.target_dir {
-            println!("target:   {}", shell_quote(target.as_os_str()));
+            println!("target:   {}", shell_quote_path(target));
         }
         for directory in &self.preparations {
-            println!("prepare:  mkdir -p {}", shell_quote(directory.as_os_str()));
+            println!("prepare:  mkdir -p {}", shell_quote_path(directory));
         }
         println!("command:  {}", self.render_command());
     }
@@ -233,7 +233,7 @@ impl CommandPlan {
             fs::create_dir_all(directory).map_err(|error| {
                 DtrError::new(format!(
                     "could not create directory {}: {error}",
-                    directory.display()
+                    display_path(directory)
                 ))
             })?;
         }
@@ -261,7 +261,7 @@ impl CommandPlan {
                 messages.narrate_stderr(format!(
                     "→ {} (in {})",
                     self.render_command(),
-                    shell_quote(absolute_path(directory).as_os_str())
+                    shell_quote_path(&absolute_path(directory))
                 ));
             } else {
                 messages.narrate_stderr(format!("→ {}", self.render_command()));
@@ -297,18 +297,20 @@ impl CommandPlan {
     }
 
     pub(crate) fn render_command(&self) -> String {
-        std::iter::once(self.program.as_os_str())
-            .chain(self.args.iter().map(OsString::as_os_str))
-            .map(shell_quote)
-            .collect::<Vec<_>>()
-            .join(" ")
+        let mut rendered = vec![shell_quote(&self.program)];
+        rendered.extend(
+            self.args
+                .iter()
+                .map(|argument| shell_quote_argument(argument)),
+        );
+        rendered.join(" ")
     }
 
     fn report_success(&self, messages: &mut MessageSink<'_>) {
         match &self.kind {
             PlanKind::Clone => {
                 if let Some(target) = &self.target_dir {
-                    messages.narrate_stdout(absolute_path(target).display().to_string());
+                    messages.narrate_stdout(display_path(&absolute_path(target)));
                 }
             }
             PlanKind::GoInstall(source) => match self.go_installed_binaries(source) {
@@ -417,10 +419,10 @@ fn narrate_installed_binaries(binaries: &[PathBuf], messages: &mut MessageSink<'
             .map(|name| name.to_string_lossy())
             .collect::<Vec<_>>()
             .join(", ");
-        messages.narrate_stderr(format!("installed: {names} → {}", directory.display()));
+        messages.narrate_stderr(format!("installed: {names} → {}", display_path(directory)));
     } else {
         for binary in binaries {
-            messages.narrate_stderr(format!("installed: {}", binary.display()));
+            messages.narrate_stderr(format!("installed: {}", display_path(binary)));
         }
     }
 }
@@ -428,7 +430,10 @@ fn narrate_installed_binaries(binaries: &[PathBuf], messages: &mut MessageSink<'
 fn warn_about_path(binaries: &[PathBuf], messages: &mut MessageSink<'_>) {
     let Some(path) = env::var_os("PATH") else {
         for directory in unique_binary_directories(binaries) {
-            messages.warn_stderr(format!("warning: {} is not on PATH", directory.display()));
+            messages.warn_stderr(format!(
+                "warning: {} is not on PATH",
+                display_path(&directory)
+            ));
         }
         return;
     };
@@ -439,7 +444,10 @@ fn warn_about_path(binaries: &[PathBuf], messages: &mut MessageSink<'_>) {
             .iter()
             .position(|candidate| paths_equivalent(candidate, &directory))
         else {
-            messages.warn_stderr(format!("warning: {} is not on PATH", directory.display()));
+            messages.warn_stderr(format!(
+                "warning: {} is not on PATH",
+                display_path(&directory)
+            ));
             continue;
         };
 
@@ -458,7 +466,7 @@ fn warn_about_path(binaries: &[PathBuf], messages: &mut MessageSink<'_>) {
                 messages.warn_stderr(format!(
                     "warning: '{}' is shadowed by {} (earlier on PATH)",
                     name.to_string_lossy(),
-                    shadow.display()
+                    display_path(&shadow)
                 ));
             }
         }
@@ -496,6 +504,64 @@ fn absolute_path(path: &Path) -> PathBuf {
             .map(|directory| directory.join(path))
             .unwrap_or_else(|_| path.to_path_buf())
     }
+}
+
+pub(crate) fn display_path(path: &Path) -> String {
+    friendly_path(path).to_string_lossy().into_owned()
+}
+
+pub(crate) fn friendly_path(path: &Path) -> OsString {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+        let encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        let verbatim_prefix = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+        let unc_prefix = [b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16];
+        let remainder = encoded
+            .strip_prefix(&verbatim_prefix)
+            .unwrap_or(encoded.as_slice());
+        let mut friendly = if remainder.len() >= unc_prefix.len()
+            && remainder[..unc_prefix.len()]
+                .iter()
+                .zip(unc_prefix)
+                .all(|(actual, expected)| {
+                    *actual == expected
+                        || ((b'A' as u16..=b'Z' as u16).contains(&expected)
+                            && *actual == expected + 32)
+                })
+            && remainder.len() != encoded.len()
+        {
+            let mut unc = vec![b'\\' as u16, b'\\' as u16];
+            unc.extend_from_slice(&remainder[unc_prefix.len()..]);
+            unc
+        } else {
+            remainder.to_vec()
+        };
+        for unit in &mut friendly {
+            if *unit == b'/' as u16 {
+                *unit = b'\\' as u16;
+            }
+        }
+        OsString::from_wide(&friendly)
+    }
+    #[cfg(not(windows))]
+    {
+        path.as_os_str().to_os_string()
+    }
+}
+
+pub(crate) fn shell_quote_argument(argument: &OsStr) -> String {
+    let path = Path::new(argument);
+    if path.is_absolute() {
+        shell_quote_path(path)
+    } else {
+        shell_quote(argument)
+    }
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    shell_quote(&friendly_path(path))
 }
 
 pub(crate) fn apply_environment(
@@ -695,6 +761,36 @@ mod tests {
             "npm install --global '--prefix=two&words' -- ./tool"
         );
         assert_eq!(plan.execute(false).unwrap(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_command_rendering_uses_friendly_native_paths() {
+        let plan = CommandPlan {
+            kind: PlanKind::OtherInstall,
+            program: "cargo".into(),
+            executable: "cargo".into(),
+            args: ["install", "--path", r"\\?\C:\Users\mclark\p/my/lat"]
+                .map(OsString::from)
+                .to_vec(),
+            current_dir: None,
+            target_dir: None,
+            preparations: Vec::new(),
+            repospec: r"\\?\C:\Users\mclark\p/my/lat".to_owned(),
+            backend: "cargo",
+            auth: None,
+            environment: Vec::new(),
+            removed_environment: Vec::new(),
+        };
+
+        assert_eq!(
+            plan.render_command(),
+            r"cargo install --path 'C:\Users\mclark\p\my\lat'"
+        );
+        assert_eq!(
+            display_path(Path::new(r"\\?\UNC\server/share\tool")),
+            r"\\server\share\tool"
+        );
     }
 
     #[test]

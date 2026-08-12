@@ -42,10 +42,11 @@ absent; an existing `kit.toml`, explain mode, and explicit `--file` paths do not
 trigger migration.
 
 `--add` retains normal install planning and execution, then appends the exact
-successful request to the default `kit.toml`. Local paths are stored canonically,
-auto selection is replaced by the resolved backend, exact duplicate entries are
-ignored, and existing file text is preserved. Explain mode reports the target
-without mutating it; failed installs are not tracked.
+successful request to the default `kit.toml`. Local paths are stored canonically;
+Windows storage uses native separators without the `\\?\` prefix. Auto selection
+is replaced by the resolved backend, exact duplicate entries are ignored, and
+existing file text is preserved. Explain mode reports the target without
+mutating it; failed installs are not tracked.
 
 ※ `dtr kit install` originally always retained native child output. It now
 accepts a counted `-q`/`--quiet`: one occurrence suppresses installer stdout and
@@ -54,6 +55,9 @@ Warnings and errors remain visible at every level. With no quiet option, native
 child output and immediate narration remain visible while jobs run. Dtr command,
 install-success, and warning messages are replayed in configuration order after
 all jobs complete. PATH warnings are replayed even when narration is disabled.
+Windows narration normalizes displayed local paths to native backslash-separated
+paths without the canonicalization-only `\\?\` prefix; execution argv retains
+the original resolved path.
 
 The first Ctrl-C stops new job dispatch while allowing active child processes to
 finish normally. Dtr emits the accumulated replay only after they finish,

@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli::{InstallArgs, InstallTool, Jobs, KitArgs, KitCommand};
 use crate::command::{
-    CommandPlan, DtrMessage, InterruptState, ToolOutput, command_exists, shell_quote,
+    CommandPlan, DtrMessage, InterruptState, ToolOutput, command_exists, display_path,
+    friendly_path, shell_quote_argument,
 };
 use crate::config::{self, Config};
 use crate::error::DtrError;
@@ -506,7 +507,7 @@ fn render_install_command(entry: &InstallEntry, home: Option<&Path>) -> Result<S
     }
     Ok(arguments
         .iter()
-        .map(|argument| shell_quote(argument))
+        .map(|argument| shell_quote_argument(argument))
         .collect::<Vec<_>>()
         .join(" "))
 }
@@ -516,7 +517,7 @@ fn edit(path: &Path, explain: bool, narration_override: Option<bool>) -> Result<
     arguments.push(path.as_os_str().to_os_string());
     let rendered = std::iter::once(program.as_os_str())
         .chain(arguments.iter().map(OsString::as_os_str))
-        .map(shell_quote)
+        .map(shell_quote_argument)
         .collect::<Vec<_>>()
         .join(" ");
     if explain {
@@ -597,46 +598,29 @@ fn backend_tool(backend: &str) -> Result<InstallTool, DtrError> {
 }
 
 fn tracked_local_path(path: &Path, home: Option<&Path>) -> Result<String, DtrError> {
+    #[cfg(not(windows))]
     if let Some(home) = home {
         if path == home {
             return Ok("~".to_owned());
         }
         if let Ok(suffix) = path.strip_prefix(home) {
             let suffix = path_text(suffix)?;
-            #[cfg(windows)]
-            let suffix = suffix.replace('\\', "/");
             return Ok(format!("~/{suffix}"));
         }
     }
+    #[cfg(windows)]
+    let _ = home;
     path_text(path)
 }
 
 fn path_text(path: &Path) -> Result<String, DtrError> {
-    path.to_str()
-        .map(friendly_windows_path)
-        .ok_or_else(|| DtrError::new("kit.toml cannot store a non-UTF-8 local repository path"))
-}
-
-fn display_path(path: &Path) -> String {
-    friendly_windows_path(&path.to_string_lossy())
+    friendly_path(path)
+        .into_string()
+        .map_err(|_| DtrError::new("kit.toml cannot store a non-UTF-8 local repository path"))
 }
 
 fn tracked_message(repospec: &str, config_path: &Path) -> String {
     format!("tracked: {repospec} → {}", display_path(config_path))
-}
-
-fn friendly_windows_path(path: &str) -> String {
-    #[cfg(windows)]
-    {
-        if let Some(path) = path.strip_prefix(r"\\?\UNC\") {
-            return format!(r"\\{path}");
-        }
-        path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
-    }
-    #[cfg(not(windows))]
-    {
-        path.to_owned()
-    }
 }
 
 fn append_entry(mut text: String, entry: &InstallEntry) -> Result<String, DtrError> {
@@ -790,6 +774,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn tracked_local_paths_use_home_shorthand_when_possible() {
         let home = Path::new("/home/user");
@@ -817,7 +802,7 @@ mod tests {
             render_install_command(&entry, Some(home)).unwrap(),
             format!(
                 "dtr install --tool cargo {} -- --features pcre2",
-                shell_quote(repository.as_os_str())
+                shell_quote_argument(repository.as_os_str())
             )
         );
     }
@@ -831,7 +816,17 @@ mod tests {
 
         assert_eq!(
             tracked_local_path(repository, Some(home)).unwrap(),
-            "~/p/my/gitoverit"
+            r"C:\Users\mclark\p\my\gitoverit"
+        );
+        let entry = InstallEntry {
+            repospec: tracked_local_path(repository, Some(home)).unwrap(),
+            tool: InstallTool::Cargo,
+            no_latest: false,
+            args: Vec::new(),
+        };
+        assert_eq!(
+            append_entry(String::new(), &entry).unwrap(),
+            "[[install]]\nrepospec = 'C:\\Users\\mclark\\p\\my\\gitoverit'\ntool = \"cargo\"\n"
         );
         assert_eq!(
             tracked_message(&display_path(repository), config),

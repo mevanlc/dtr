@@ -380,7 +380,8 @@ dtr install --add --tool cargo ./my-tool -- --force --features color
 Dtr validates the existing file before starting the installer and appends a new
 `[[install]]` table only after the installer succeeds. An exact duplicate is not
 added twice. Existing comments and formatting remain intact. Local paths are
-canonicalized and stored with `~/` when they are below the user home directory;
+canonicalized; Unix paths below the user home directory are stored with `~/`,
+while Windows paths are stored without a `\\?\` prefix and use `\` separators;
 an automatically selected backend is recorded explicitly so later batch runs
 repeat the same installer choice. `--explain` reports the file that would be
 updated without installing or writing it.
@@ -464,6 +465,8 @@ and performs the final replay. A third Ctrl-C exits immediately without replay.
 Individual clone and install operations narrate the command dtr is about to run
 on stderr. `dtr kit install` leaves those command and success messages visible
 as jobs run, then replays them in configuration order after all jobs complete.
+On Windows, displayed local paths use native backslash separators and omit the
+verbatim `\\?\` prefix that filesystem canonicalization may produce.
 For a command that runs in a repository directory, the command line includes
 its absolute working directory:
 
