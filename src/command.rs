@@ -16,6 +16,7 @@ use crate::error::DtrError;
 pub(crate) struct CommandPlan {
     pub(crate) kind: PlanKind,
     pub(crate) program: OsString,
+    pub(crate) executable: OsString,
     pub(crate) args: Vec<OsString>,
     pub(crate) current_dir: Option<PathBuf>,
     pub(crate) target_dir: Option<PathBuf>,
@@ -228,7 +229,7 @@ impl CommandPlan {
             })?;
         }
 
-        let mut command = Command::new(&self.program);
+        let mut command = Command::new(&self.executable);
         command.args(&self.args);
         apply_environment(&mut command, &self.environment, &self.removed_environment);
         if let Some(directory) = &self.current_dir {
@@ -349,7 +350,7 @@ impl CommandPlan {
     }
 
     fn run_go_query<const N: usize>(&self, args: [&str; N]) -> Result<Output, String> {
-        let mut command = Command::new(&self.program);
+        let mut command = Command::new(&self.executable);
         command.args(args);
         apply_environment(&mut command, &self.environment, &self.removed_environment);
         if let Some(directory) = &self.current_dir {
@@ -500,6 +501,27 @@ pub(crate) fn command_exists(program: &str) -> bool {
 }
 
 #[cfg(not(windows))]
+pub(crate) fn npm_executable() -> Option<OsString> {
+    command_exists("npm").then(|| OsString::from("npm"))
+}
+
+#[cfg(windows)]
+pub(crate) fn npm_executable() -> Option<OsString> {
+    let path = env::var_os("PATH")?;
+    env::split_paths(&path)
+        .find_map(|directory| windows_npm_executable_in(&directory))
+        .map(PathBuf::into_os_string)
+}
+
+#[cfg(windows)]
+fn windows_npm_executable_in(directory: &Path) -> Option<PathBuf> {
+    ["npm.exe", "npm.cmd", "npm.bat"]
+        .into_iter()
+        .map(|name| directory.join(name))
+        .find(|path| is_executable(path))
+}
+
+#[cfg(not(windows))]
 fn command_exists_in(directory: &Path, program: &str) -> bool {
     is_executable(&directory.join(program))
 }
@@ -593,6 +615,68 @@ mod tests {
         assert!(command_exists_in(directory.path(), "cargo"));
         assert!(command_exists_in(directory.path(), "cargo.exe"));
         assert!(!command_exists_in(directory.path(), "missing"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn npm_lookup_selects_supported_windows_shims_only() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("npm"), []).unwrap();
+        fs::write(directory.path().join("npm.ps1"), []).unwrap();
+
+        assert_eq!(windows_npm_executable_in(directory.path()), None);
+
+        let bat = directory.path().join("npm.bat");
+        fs::write(&bat, []).unwrap();
+        assert_eq!(windows_npm_executable_in(directory.path()), Some(bat));
+
+        let cmd = directory.path().join("npm.cmd");
+        fs::write(&cmd, []).unwrap();
+        assert_eq!(windows_npm_executable_in(directory.path()), Some(cmd));
+
+        let exe = directory.path().join("npm.exe");
+        fs::write(&exe, []).unwrap();
+        assert_eq!(windows_npm_executable_in(directory.path()), Some(exe));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_plan_executes_resolved_npm_cmd_but_renders_npm() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("npm.cmd");
+        fs::write(
+            &executable,
+            "@echo off\r\n\
+             if not \"%~1\"==\"install\" exit /b 21\r\n\
+             if not \"%~2\"==\"--global\" exit /b 22\r\n\
+             if not \"%~3\"==\"--prefix=two&words\" exit /b 23\r\n\
+             if not \"%~4\"==\"--\" exit /b 24\r\n\
+             if not \"%~5\"==\"./tool\" exit /b 25\r\n\
+             exit /b 0\r\n",
+        )
+        .unwrap();
+        let plan = CommandPlan {
+            kind: PlanKind::OtherInstall,
+            program: "npm".into(),
+            executable: executable.into_os_string(),
+            args: ["install", "--global", "--prefix=two&words", "--", "./tool"]
+                .map(OsString::from)
+                .to_vec(),
+            current_dir: None,
+            target_dir: None,
+            preparations: Vec::new(),
+            repospec: "./tool".to_owned(),
+            backend: "npm",
+            auth: None,
+            environment: Vec::new(),
+            removed_environment: Vec::new(),
+        };
+
+        assert_eq!(
+            plan.render_command(),
+            "npm install --global '--prefix=two&words' -- ./tool"
+        );
+        assert_eq!(plan.execute(false).unwrap(), 0);
     }
 
     #[test]

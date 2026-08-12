@@ -4,7 +4,9 @@ use std::process::Command;
 
 use crate::cli::{InstallArgs, InstallTool};
 use crate::clone_args::{CloneRequest, NameMode};
-use crate::command::{CommandPlan, GoInstallSource, PlanKind, SecretEnvironment, command_exists};
+use crate::command::{
+    CommandPlan, GoInstallSource, PlanKind, SecretEnvironment, command_exists, npm_executable,
+};
 use crate::config::Config;
 use crate::error::DtrError;
 use crate::github_auth;
@@ -259,6 +261,7 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
         return Ok(CommandPlan {
             kind: PlanKind::GoInstall(GoInstallSource::Local),
             program: "go".into(),
+            executable: "go".into(),
             args: ["install", "./..."].map(OsString::from).to_vec(),
             current_dir: Some(directory),
             target_dir: None,
@@ -285,6 +288,7 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
             import_path: install_source,
         }),
         program: "go".into(),
+        executable: "go".into(),
         args: vec!["install".into(), import_path.into()],
         current_dir: None,
         target_dir: None,
@@ -341,6 +345,7 @@ fn plan_cargo_install(context: InstallContext) -> Result<CommandPlan, DtrError> 
     Ok(CommandPlan {
         kind: PlanKind::OtherInstall,
         program: "cargo".into(),
+        executable: "cargo".into(),
         args: command_args,
         current_dir: None,
         target_dir: None,
@@ -434,6 +439,7 @@ fn plan_python_install(
     Ok(CommandPlan {
         kind: PlanKind::OtherInstall,
         program: backend.program().into(),
+        executable: backend.program().into(),
         args: command_args,
         current_dir: None,
         target_dir: None,
@@ -460,7 +466,11 @@ fn plan_npm_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
         ));
     }
     validate_npm_arguments(&args.install_args)?;
-    require_command("npm", "installing a JavaScript tool with npm")?;
+    let executable = npm_executable().ok_or_else(|| {
+        DtrError::new(
+            "npm is required for installing a JavaScript tool with npm, but was not found on PATH",
+        )
+    })?;
 
     let repospec = spec.description();
     let source = spec.npm_package_source(github_owner.as_deref())?;
@@ -483,6 +493,7 @@ fn plan_npm_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
     Ok(CommandPlan {
         kind: PlanKind::OtherInstall,
         program: "npm".into(),
+        executable,
         args: command_args,
         current_dir: None,
         target_dir: None,
@@ -630,6 +641,7 @@ fn forge_clone_plan(
     CommandPlan {
         kind: PlanKind::Clone,
         program: program.into(),
+        executable: program.into(),
         args,
         current_dir: None,
         target_dir: Some(target_dir),
@@ -662,6 +674,7 @@ fn git_clone_plan(
     CommandPlan {
         kind: PlanKind::Clone,
         program: "git".into(),
+        executable: "git".into(),
         args,
         current_dir: None,
         target_dir: Some(target_dir),
