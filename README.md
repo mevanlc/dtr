@@ -388,7 +388,7 @@ updated without installing or writing it.
 ## Manage an installation kit
 
 ```text
-dtr [--explain|-n] [--narration|--no-narration] kit install [-j|--jobs <n|auto>] [--file <FILE>]
+dtr [--explain|-n] [--narration|--no-narration] kit install [-j|--jobs <n|auto>] [-q|--quiet] [--file <FILE>]
 dtr kit list [--file <FILE>]
 dtr [--explain|-n] kit edit [--file <FILE>]
 ```
@@ -418,6 +418,11 @@ queue in configuration order, while process starts, native installer output, and
 completion order can differ. Native output can therefore interleave when more
 than one job runs.
 
+`-q` or `--quiet` suppresses native installer stdout. Repeat the option as `-qq`
+or `--quiet --quiet` to suppress native installer stderr as well. A third
+occurrence (`-qqq`) also suppresses dtr's execution narration, like
+`--no-narration`. Dtr's warnings and errors remain visible at every level.
+
 Each entry requires `repospec`. It accepts the same repository references as
 `dtr install`, plus a leading `~/` for a path below the user home directory.
 `tool` defaults to `auto` and accepts the normal install tool values. `no_latest`
@@ -442,7 +447,7 @@ args = ["--force", "--features", "pcre2"]
 Malformed or missing configuration is a fatal error. Once the file has been
 loaded, an entry that cannot be planned, started, or completed emits a warning;
 dtr continues with the remaining entries and exits with status 1 after any such
-failure. Native installer output is left visible. Use
+failure. Native installer output is left visible unless `--quiet` is used. Use
 `dtr --explain kit install` to print the resolved job count and every plan
 without running an installer.
 Enabled kit-install narration remains visible while jobs run and is replayed in

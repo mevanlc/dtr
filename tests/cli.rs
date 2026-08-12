@@ -377,6 +377,9 @@ esac
 for arg in "$@"; do
   printf 'arg=<%s>\n' "$arg" >> "$log"
 done
+if [ -n "${DTR_TEST_CHILD_STDOUT-}" ]; then
+  printf '%s\n' "$DTR_TEST_CHILD_STDOUT"
+fi
 if [ -n "${DTR_TEST_CHILD_STDERR-}" ]; then
   printf '%s\n' "$DTR_TEST_CHILD_STDERR" >&2
 fi
@@ -821,6 +824,67 @@ fn kit_replays_narration_after_all_native_child_output() {
 }
 
 #[test]
+fn kit_quiet_levels_suppress_only_the_requested_native_output() {
+    let harness = Harness::new(&["cargo"]);
+    harness.write_kit(
+        r#"
+            [[install]]
+            repospec = "./tool"
+            tool = "cargo"
+        "#,
+    );
+
+    for (quiet, expect_stdout, expect_stderr, expect_narration) in [
+        (&[][..], true, true, true),
+        (&["-q"][..], false, true, true),
+        (&["-qq"][..], false, false, true),
+        (&["-qqq"][..], false, false, false),
+    ] {
+        let mut arguments = vec!["kit", "install"];
+        arguments.extend_from_slice(quiet);
+        let output = harness
+            .command(&arguments)
+            .env("DTR_TEST_CHILD_STDOUT", "native child stdout")
+            .env("DTR_TEST_CHILD_STDERR", "native child stderr")
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(
+            stdout(&output).contains("native child stdout"),
+            expect_stdout,
+            "quiet arguments: {quiet:?}"
+        );
+        let stderr = stderr(&output);
+        assert_eq!(
+            stderr.contains("native child stderr"),
+            expect_stderr,
+            "quiet arguments: {quiet:?}; stderr: {stderr}"
+        );
+        assert_eq!(
+            stderr.contains("→ cargo install --path ./tool"),
+            expect_narration,
+            "quiet arguments: {quiet:?}; stderr: {stderr}"
+        );
+    }
+
+    let failed = harness
+        .command(&["kit", "install", "-qqq"])
+        .env("DTR_TEST_CHILD_STDOUT", "native child stdout")
+        .env("DTR_TEST_CHILD_STDERR", "native child stderr")
+        .env("DTR_TEST_EXIT", "9")
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(1));
+    assert_eq!(stdout(&failed), "");
+    assert_eq!(
+        stderr(&failed),
+        "dtr: warning: kit entry 1 (\"./tool\") exited with status 9\n\
+         dtr: warning: kit entry 1 (\"./tool\") exited with status 9\n"
+    );
+}
+
+#[test]
 fn kit_replays_path_warnings_when_narration_is_disabled() {
     let harness = Harness::new(&["go"]);
     let install_directory = harness.work.join("go-bin");
@@ -1039,6 +1103,7 @@ fn kit_help_and_jobs_validation_are_explicit() {
     assert!(install_help.status.success(), "{}", stderr(&install_help));
     let help_text = stdout(&install_help);
     assert!(help_text.contains("-j, --jobs <n|auto>"), "{help_text}");
+    assert!(help_text.contains("-q, --quiet"), "{help_text}");
     assert!(help_text.contains("[default: auto]"), "{help_text}");
     assert!(
         help_text.contains("ceil(available CPU cores / 2)"),

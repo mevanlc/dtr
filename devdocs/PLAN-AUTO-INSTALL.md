@@ -47,10 +47,13 @@ auto selection is replaced by the resolved backend, exact duplicate entries are
 ignored, and existing file text is preserved. Explain mode reports the target
 without mutating it; failed installs are not tracked.
 
-`dtr kit install` retains native child output and immediate narration while jobs
-run, then replays dtr command, install-success, and warning messages in
-configuration order after all jobs complete. PATH warnings are replayed even
-when narration is disabled.
+※ `dtr kit install` originally always retained native child output. It now
+accepts a counted `-q`/`--quiet`: one occurrence suppresses installer stdout and
+two suppress installer stderr as well; a third also disables dtr narration.
+Warnings and errors remain visible at every level. With no quiet option, native
+child output and immediate narration remain visible while jobs run. Dtr command,
+install-success, and warning messages are replayed in configuration order after
+all jobs complete. PATH warnings are replayed even when narration is disabled.
 
 The first Ctrl-C stops new job dispatch while allowing active child processes to
 finish normally. Dtr emits the accumulated replay only after they finish,

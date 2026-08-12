@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Parser)]
@@ -108,6 +108,10 @@ pub(crate) struct KitInstallArgs {
     /// Maximum concurrent installs; auto uses ceil(available CPU cores / 2)
     #[arg(short = 'j', long, value_name = "n|auto", default_value_t = Jobs::Auto)]
     pub(crate) jobs: Jobs,
+
+    /// Suppress installer stdout; repeat for stderr, then dtr narration
+    #[arg(short = 'q', long, action = ArgAction::Count)]
+    pub(crate) quiet: u8,
 }
 
 #[derive(Debug, Args)]
@@ -280,6 +284,7 @@ mod tests {
         };
         assert_eq!(args.jobs, Jobs::Auto);
         assert_eq!(args.file, None);
+        assert_eq!(args.quiet, 0);
     }
 
     #[test]
@@ -328,6 +333,25 @@ mod tests {
                 Cli::try_parse_from(["dtr", "kit", "install", "-j", value]).is_err(),
                 "{value:?}"
             );
+        }
+    }
+
+    #[test]
+    fn kit_quiet_counts_short_and_long_occurrences() {
+        for (arguments, expected) in [
+            (vec!["dtr", "kit", "install", "-q"], 1),
+            (vec!["dtr", "kit", "install", "-qq"], 2),
+            (vec!["dtr", "kit", "install", "-qqq"], 3),
+            (vec!["dtr", "kit", "install", "--quiet", "--quiet"], 2),
+        ] {
+            let cli = Cli::try_parse_from(arguments).expect("valid quiet level");
+            let DtrCommand::Kit(args) = cli.command else {
+                panic!("expected kit command");
+            };
+            let KitCommand::Install(args) = args.command else {
+                panic!("expected kit install command");
+            };
+            assert_eq!(args.quiet, expected);
         }
     }
 

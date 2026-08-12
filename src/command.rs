@@ -6,7 +6,7 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 #[cfg(unix)]
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -48,6 +48,13 @@ pub(crate) struct InterruptState {
     interrupt_count: AtomicUsize,
     #[cfg(unix)]
     active_process_groups: Mutex<HashSet<u32>>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ToolOutput {
+    Inherit,
+    SuppressStdout,
+    SuppressStdoutAndStderr,
 }
 
 impl InterruptState {
@@ -199,7 +206,7 @@ impl CommandPlan {
             narration,
             replay: None,
         };
-        self.execute_with_messages(&mut messages, None)
+        self.execute_with_messages(&mut messages, None, ToolOutput::Inherit)
     }
 
     pub(crate) fn execute_with_replay(
@@ -207,18 +214,20 @@ impl CommandPlan {
         narration: bool,
         replay: &mut Vec<DtrMessage>,
         interrupted: &InterruptState,
+        tool_output: ToolOutput,
     ) -> Result<i32, DtrError> {
         let mut messages = MessageSink {
             narration,
             replay: Some(replay),
         };
-        self.execute_with_messages(&mut messages, Some(interrupted))
+        self.execute_with_messages(&mut messages, Some(interrupted), tool_output)
     }
 
     fn execute_with_messages(
         &self,
         messages: &mut MessageSink<'_>,
         interrupted: Option<&InterruptState>,
+        tool_output: ToolOutput,
     ) -> Result<i32, DtrError> {
         for directory in &self.preparations {
             fs::create_dir_all(directory).map_err(|error| {
@@ -231,6 +240,15 @@ impl CommandPlan {
 
         let mut command = Command::new(&self.executable);
         command.args(&self.args);
+        match tool_output {
+            ToolOutput::Inherit => {}
+            ToolOutput::SuppressStdout => {
+                command.stdout(Stdio::null());
+            }
+            ToolOutput::SuppressStdoutAndStderr => {
+                command.stdout(Stdio::null()).stderr(Stdio::null());
+            }
+        }
         apply_environment(&mut command, &self.environment, &self.removed_environment);
         if let Some(directory) = &self.current_dir {
             command.current_dir(directory);

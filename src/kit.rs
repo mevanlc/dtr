@@ -11,7 +11,9 @@ use std::thread;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{InstallArgs, InstallTool, Jobs, KitArgs, KitCommand};
-use crate::command::{CommandPlan, DtrMessage, InterruptState, command_exists, shell_quote};
+use crate::command::{
+    CommandPlan, DtrMessage, InterruptState, ToolOutput, command_exists, shell_quote,
+};
 use crate::config::{self, Config};
 use crate::error::DtrError;
 use crate::repospec::InstallSource;
@@ -155,7 +157,12 @@ pub(crate) fn run(
     let config = load_required(&path)?.config;
     let requested_jobs = args.jobs;
     let job_count = requested_jobs.resolve();
-    let narration = if explain {
+    let tool_output = match args.quiet {
+        0 => ToolOutput::Inherit,
+        1 => ToolOutput::SuppressStdout,
+        _ => ToolOutput::SuppressStdoutAndStderr,
+    };
+    let narration = if explain || args.quiet >= 3 {
         false
     } else {
         match narration_override {
@@ -232,6 +239,7 @@ pub(crate) fn run(
             jobs,
             job_count,
             narration,
+            tool_output,
             preflight_results,
             interrupted
                 .as_deref()
@@ -305,6 +313,7 @@ fn execute_jobs(
     jobs: Vec<InstallJob>,
     job_count: usize,
     narration: bool,
+    tool_output: ToolOutput,
     initial_results: Vec<InstallJobResult>,
     interrupted: &InterruptState,
 ) -> KitExecution {
@@ -329,7 +338,7 @@ fn execute_jobs(
                     if interrupted.is_interrupted() {
                         break;
                     }
-                    let result = execute_job(&job, narration, interrupted);
+                    let result = execute_job(&job, narration, tool_output, interrupted);
                     results
                         .lock()
                         .expect("kit results should not be poisoned")
@@ -358,12 +367,13 @@ fn execute_jobs(
 fn execute_job(
     job: &InstallJob,
     narration: bool,
+    tool_output: ToolOutput,
     interrupted: &InterruptState,
 ) -> InstallJobResult {
     let mut messages = Vec::new();
-    let execution = job
-        .plan
-        .execute_with_replay(narration, &mut messages, interrupted);
+    let execution =
+        job.plan
+            .execute_with_replay(narration, &mut messages, interrupted, tool_output);
     let succeeded = if interrupted.is_interrupted() {
         false
     } else {
