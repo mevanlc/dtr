@@ -437,8 +437,40 @@ fn config_file_path() -> Result<PathBuf, DtrError> {
         .ok_or_else(|| DtrError::new("could not locate the user home directory"))
 }
 
-pub(crate) fn install_all_file_path() -> Result<PathBuf, DtrError> {
-    Ok(config_file_path()?.with_file_name("install-all.toml"))
+pub(crate) fn kit_file_path() -> Result<PathBuf, DtrError> {
+    Ok(config_file_path()?.with_file_name("kit.toml"))
+}
+
+pub(crate) fn migrate_legacy_kit_file() -> Result<PathBuf, DtrError> {
+    let kit = kit_file_path()?;
+    if path_entry_exists(&kit, "kit configuration")? {
+        return Ok(kit);
+    }
+
+    let legacy = kit.with_file_name("install-all.toml");
+    if !path_entry_exists(&legacy, "legacy kit configuration")? {
+        return Ok(kit);
+    }
+
+    fs::rename(&legacy, &kit).map_err(|error| {
+        DtrError::new(format!(
+            "could not rename legacy kit configuration {} to {}: {error}",
+            legacy.display(),
+            kit.display()
+        ))
+    })?;
+    Ok(kit)
+}
+
+fn path_entry_exists(path: &Path, description: &str) -> Result<bool, DtrError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(DtrError::new(format!(
+            "could not inspect {description} {}: {error}",
+            path.display()
+        ))),
+    }
 }
 
 fn discover_config_file_path() -> Result<Option<PathBuf>, DtrError> {

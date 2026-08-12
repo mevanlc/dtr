@@ -40,9 +40,8 @@ pub(crate) enum DtrCommand {
     #[command(visible_alias = "i")]
     Install(InstallArgs),
 
-    /// Install every repository configured in install-all.toml
-    #[command(visible_alias = "ia")]
-    InstallAll(InstallAllArgs),
+    /// Manage the configured installation kit
+    Kit(KitArgs),
 
     /// Read or change dtr configuration
     #[command(
@@ -61,7 +60,7 @@ pub(crate) struct CloneArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct InstallArgs {
-    /// Add this install to install-all.toml after it succeeds
+    /// Add this install to kit.toml after it succeeds
     #[arg(short = 'a', long)]
     pub(crate) add: bool,
 
@@ -83,28 +82,39 @@ pub(crate) struct InstallArgs {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct InstallAllArgs {
-    /// List tracked installs as reusable dtr install commands
-    #[arg(long, conflicts_with = "edit")]
-    pub(crate) list: bool,
+pub(crate) struct KitArgs {
+    #[command(subcommand)]
+    pub(crate) command: KitCommand,
+}
 
-    /// Edit the install-all configuration
-    #[arg(long, conflicts_with = "list")]
-    pub(crate) edit: bool,
+#[derive(Debug, Subcommand)]
+pub(crate) enum KitCommand {
+    /// Install every repository in the kit
+    Install(KitInstallArgs),
 
-    /// Use an alternate install-all TOML file
+    /// List kit entries as reusable dtr install commands
+    List(KitFileArgs),
+
+    /// Edit the kit configuration
+    Edit(KitFileArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct KitInstallArgs {
+    /// Use an alternate kit TOML file
     #[arg(long, value_name = "FILE")]
     pub(crate) file: Option<PathBuf>,
 
     /// Maximum concurrent installs; auto uses ceil(available CPU cores / 2)
-    #[arg(
-        short = 'j',
-        long,
-        value_name = "n|auto",
-        default_value_t = Jobs::Auto,
-        conflicts_with_all = ["list", "edit"]
-    )]
+    #[arg(short = 'j', long, value_name = "n|auto", default_value_t = Jobs::Auto)]
     pub(crate) jobs: Jobs,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct KitFileArgs {
+    /// Use an alternate kit TOML file
+    #[arg(long, value_name = "FILE")]
+    pub(crate) file: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -259,19 +269,21 @@ mod tests {
     }
 
     #[test]
-    fn install_all_alias_is_accepted() {
-        let cli = Cli::try_parse_from(["dtr", "ia"]).expect("valid install-all command");
-        let DtrCommand::InstallAll(args) = cli.command else {
-            panic!("expected install-all command");
+    fn kit_install_defaults_to_automatic_jobs() {
+        let cli =
+            Cli::try_parse_from(["dtr", "kit", "install"]).expect("valid kit install command");
+        let DtrCommand::Kit(args) = cli.command else {
+            panic!("expected kit command");
+        };
+        let KitCommand::Install(args) = args.command else {
+            panic!("expected kit install command");
         };
         assert_eq!(args.jobs, Jobs::Auto);
-        assert!(!args.list);
-        assert!(!args.edit);
         assert_eq!(args.file, None);
     }
 
     #[test]
-    fn install_add_and_install_all_management_options_are_accepted() {
+    fn install_add_and_kit_file_options_are_accepted() {
         let install = Cli::try_parse_from(["dtr", "install", "--add", "./tool"])
             .expect("valid tracked install");
         let DtrCommand::Install(args) = install.command else {
@@ -279,39 +291,41 @@ mod tests {
         };
         assert!(args.add);
 
-        for option in ["--list", "--edit"] {
-            let cli = Cli::try_parse_from(["dtr", "ia", option, "--file", "other.toml"])
-                .expect("valid install-all management command");
-            let DtrCommand::InstallAll(args) = cli.command else {
-                panic!("expected install-all command");
+        for subcommand in ["list", "edit"] {
+            let cli = Cli::try_parse_from(["dtr", "kit", subcommand, "--file", "other.toml"])
+                .expect("valid kit management command");
+            let DtrCommand::Kit(args) = cli.command else {
+                panic!("expected kit command");
             };
-            assert_eq!(args.list, option == "--list");
-            assert_eq!(args.edit, option == "--edit");
-            assert_eq!(args.file, Some(PathBuf::from("other.toml")));
+            let file = match args.command {
+                KitCommand::List(args) | KitCommand::Edit(args) => args.file,
+                KitCommand::Install(_) => panic!("expected kit management command"),
+            };
+            assert_eq!(file, Some(PathBuf::from("other.toml")));
         }
-
-        assert!(Cli::try_parse_from(["dtr", "ia", "--list", "--edit"]).is_err());
-        assert!(Cli::try_parse_from(["dtr", "ia", "--list", "--jobs", "2"]).is_err());
     }
 
     #[test]
-    fn install_all_jobs_accepts_positive_counts_and_auto() {
+    fn kit_jobs_accepts_positive_counts_and_auto() {
         for (value, expected) in [
             ("auto", Jobs::Auto),
             ("1", Jobs::Count(NonZeroUsize::new(1).unwrap())),
             ("17", Jobs::Count(NonZeroUsize::new(17).unwrap())),
         ] {
-            let cli =
-                Cli::try_parse_from(["dtr", "ia", "--jobs", value]).expect("valid jobs value");
-            let DtrCommand::InstallAll(args) = cli.command else {
-                panic!("expected install-all command");
+            let cli = Cli::try_parse_from(["dtr", "kit", "install", "--jobs", value])
+                .expect("valid jobs value");
+            let DtrCommand::Kit(args) = cli.command else {
+                panic!("expected kit command");
+            };
+            let KitCommand::Install(args) = args.command else {
+                panic!("expected kit install command");
             };
             assert_eq!(args.jobs, expected);
         }
 
         for value in ["0", "-1", "all", "1.5"] {
             assert!(
-                Cli::try_parse_from(["dtr", "ia", "-j", value]).is_err(),
+                Cli::try_parse_from(["dtr", "kit", "install", "-j", value]).is_err(),
                 "{value:?}"
             );
         }

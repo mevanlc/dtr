@@ -305,10 +305,10 @@ dtr install --tool uv ./my-tool
 
 Each key is a boolean and defaults to false. Enabled options are placed before
 the resolved source in `force`, `editable`, `reinstall` order, ahead of anything
-forwarded after `--`. They apply to every uv install, including the uv entries of
-`install-all`, and no other backend reads them. `--editable` is a uv option for
-source directories; a remote install that receives it fails in uv rather than in
-dtr.
+forwarded after `--`. They apply to every uv install, including those run by
+`dtr kit install`, and no other backend reads them. `--editable` is a uv option
+for source directories; a remote install that receives it fails in uv rather
+than in dtr.
 
 npm repositories map to local paths or npm Git package sources, then install
 globally:
@@ -371,7 +371,7 @@ The implementation sets the child process working directory directly; it never
 constructs a shell command.
 
 Use `--add` to install normally and then track the successful request in the
-default `install-all.toml`:
+default `kit.toml`:
 
 ```sh
 dtr install --add --tool cargo ./my-tool -- --force --features color
@@ -385,22 +385,27 @@ an automatically selected backend is recorded explicitly so later batch runs
 repeat the same installer choice. `--explain` reports the file that would be
 updated without installing or writing it.
 
-## Install a configured repository set
+## Manage an installation kit
 
 ```text
-dtr [--explain|-n] [--narration|--no-narration] install-all|ia [-j|--jobs <n|auto>] [--file <FILE>]
-dtr install-all|ia --list [--file <FILE>]
-dtr [--explain|-n] install-all|ia --edit [--file <FILE>]
+dtr [--explain|-n] [--narration|--no-narration] kit install [-j|--jobs <n|auto>] [--file <FILE>]
+dtr kit list [--file <FILE>]
+dtr [--explain|-n] kit edit [--file <FILE>]
 ```
 
-`install-all` reads `<user-home>/.config/dtr/install-all.toml` and plans each
+`kit install` reads `<user-home>/.config/dtr/kit.toml` and plans each
 `[[install]]` entry in file order. `DTR_CONFIG_DIR` overrides the containing
 directory just as it does for `config.toml`.
 
-`--file FILE` selects an alternate install-all TOML file for execution,
-listing, or editing. `--list` prints each tracked entry as a shell-safe,
-reusable `dtr install ...` command without invoking an installer. `--edit`
-launches the first configured or available editor in this order:
+On the first non-explain operation that uses the default file, dtr silently
+renames a sibling `install-all.toml` to `kit.toml` when `kit.toml` does not yet
+exist. If both files exist, dtr uses `kit.toml` and leaves `install-all.toml`
+untouched. Explain mode and explicit `--file` paths do not perform this migration.
+
+`--file FILE` selects an alternate kit TOML file for any of the three actions.
+`kit list` prints each tracked entry as a shell-safe, reusable
+`dtr install ...` command without invoking an installer. `kit edit` launches
+the first configured or available editor in this order:
 `DTR_EDITOR`, `VISUAL`, `EDITOR`, `vim`, then `vi`. Environment-provided editor
 commands may contain quoted arguments, such as `DTR_EDITOR='code --wait'`. Dtr
 creates the containing directory before launching the editor. In explain mode,
@@ -437,9 +442,10 @@ args = ["--force", "--features", "pcre2"]
 Malformed or missing configuration is a fatal error. Once the file has been
 loaded, an entry that cannot be planned, started, or completed emits a warning;
 dtr continues with the remaining entries and exits with status 1 after any such
-failure. Native installer output is left visible. Use `dtr --explain ia` to
-print the resolved job count and every plan without running an installer.
-Enabled install-all narration remains visible while jobs run and is replayed in
+failure. Native installer output is left visible. Use
+`dtr --explain kit install` to print the resolved job count and every plan
+without running an installer.
+Enabled kit-install narration remains visible while jobs run and is replayed in
 configuration order after every build and install has completed. PATH warnings
 are included in the final replay even when narration is disabled.
 On the first Ctrl-C, dtr stops dispatching queued entries while allowing active
@@ -451,10 +457,10 @@ and performs the final replay. A third Ctrl-C exits immediately without replay.
 ## Execution narration
 
 Individual clone and install operations narrate the command dtr is about to run
-on stderr. Install-all leaves those command and success messages visible as jobs
-run, then replays them in configuration order after all jobs complete. For a
-command that runs in a repository directory, the command line includes its
-absolute working directory:
+on stderr. `dtr kit install` leaves those command and success messages visible
+as jobs run, then replays them in configuration order after all jobs complete.
+For a command that runs in a repository directory, the command line includes
+its absolute working directory:
 
 ```console
 → go install ./... (in /Users/me/src/tool)
@@ -479,7 +485,7 @@ warning: 'gh' is shadowed by /opt/homebrew/bin/gh (earlier on PATH)
 
 Dtr warns when a reported Go binary directory is absent from `PATH`, or when an
 earlier executable shadows an installed binary. A PATH entry that is a symlink
-to the installed binary is not treated as a shadow. Install-all also repeats
+to the installed binary is not treated as a shadow. `dtr kit install` also repeats
 these warnings in its final replay so they remain visible after native output.
 
 Use `--no-narration` to suppress dtr's command, clone-path, and install-success

@@ -4,8 +4,8 @@ mod command;
 mod config;
 mod error;
 mod github_auth;
-mod install_all;
 mod install_detect;
+mod kit;
 mod repospec;
 mod resolve;
 
@@ -51,11 +51,11 @@ fn run() -> Result<i32, DtrError> {
             ParsedClone::Request(request) => plan_clone(*request)?,
         },
         DtrCommand::Install(args) if args.add => {
-            return install_all::run_install_and_add(args, explain, narration_override);
+            return kit::run_install_and_add(args, explain, narration_override);
         }
         DtrCommand::Install(args) => plan_install(args)?,
-        DtrCommand::InstallAll(args) => {
-            return install_all::run(args, explain, narration_override);
+        DtrCommand::Kit(args) => {
+            return kit::run(args, explain, narration_override);
         }
         DtrCommand::Config(args) => {
             if explain {

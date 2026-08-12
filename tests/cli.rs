@@ -133,13 +133,22 @@ impl Harness {
         self.config.join("config.toml")
     }
 
-    fn install_all_file(&self) -> PathBuf {
+    fn kit_file(&self) -> PathBuf {
+        self.config.join("kit.toml")
+    }
+
+    fn legacy_kit_file(&self) -> PathBuf {
         self.config.join("install-all.toml")
     }
 
-    fn write_install_all(&self, text: &str) {
+    fn write_kit(&self, text: &str) {
         fs::create_dir_all(&self.config).unwrap();
-        fs::write(self.install_all_file(), text).unwrap();
+        fs::write(self.kit_file(), text).unwrap();
+    }
+
+    fn write_legacy_kit(&self, text: &str) {
+        fs::create_dir_all(&self.config).unwrap();
+        fs::write(self.legacy_kit_file(), text).unwrap();
     }
 
     fn local_repository(&self, name: &str, files: &[&str], directories: &[&str]) -> String {
@@ -631,13 +640,13 @@ fn config_list_prints_configured_values_or_names() {
 }
 
 #[test]
-fn install_all_runs_configured_backends_and_forwards_cargo_features() {
+fn kit_runs_configured_backends_and_forwards_cargo_features() {
     let harness = Harness::new(&["cargo", "go"]);
     let cargo_repo = harness.work.join("ripgrep");
     let go_repo = harness.work.join("gdu/cmd/gdu");
     fs::create_dir_all(&cargo_repo).unwrap();
     fs::create_dir_all(&go_repo).unwrap();
-    harness.write_install_all(&format!(
+    harness.write_kit(&format!(
         r#"
             [[install]]
             repospec = {cargo_repo:?}
@@ -652,7 +661,7 @@ fn install_all_runs_configured_backends_and_forwards_cargo_features() {
         go_repo = go_repo.display().to_string(),
     ));
 
-    let output = harness.run(&["ia"]);
+    let output = harness.run(&["kit", "install"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         harness.invocation("cargo").args,
@@ -674,11 +683,11 @@ fn install_all_runs_configured_backends_and_forwards_cargo_features() {
 }
 
 #[test]
-fn install_all_warns_and_continues_after_an_entry_cannot_be_planned() {
+fn kit_warns_and_continues_after_an_entry_cannot_be_planned() {
     let harness = Harness::new(&["cargo"]);
     let cargo_repo = harness.work.join("working-tool");
     fs::create_dir_all(&cargo_repo).unwrap();
-    harness.write_install_all(&format!(
+    harness.write_kit(&format!(
         r#"
             [[install]]
             repospec = "./missing"
@@ -690,10 +699,10 @@ fn install_all_warns_and_continues_after_an_entry_cannot_be_planned() {
         cargo_repo = cargo_repo.display().to_string(),
     ));
 
-    let output = harness.run(&["install-all"]);
+    let output = harness.run(&["kit", "install"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        stderr(&output).contains("warning: install-all entry 1 (\"./missing\")"),
+        stderr(&output).contains("warning: kit entry 1 (\"./missing\")"),
         "{}",
         stderr(&output)
     );
@@ -704,11 +713,11 @@ fn install_all_warns_and_continues_after_an_entry_cannot_be_planned() {
 }
 
 #[test]
-fn install_all_explain_prints_every_plan_without_running_installers() {
+fn kit_explain_prints_every_plan_without_running_installers() {
     let harness = Harness::new(&["cargo"]);
     let cargo_repo = harness.work.join("ripgrep");
     fs::create_dir_all(&cargo_repo).unwrap();
-    harness.write_install_all(&format!(
+    harness.write_kit(&format!(
         r#"
             [[install]]
             repospec = {cargo_repo:?}
@@ -718,14 +727,11 @@ fn install_all_explain_prints_every_plan_without_running_installers() {
         cargo_repo = cargo_repo.display().to_string(),
     ));
 
-    let output = harness.run(&["--explain", "ia", "--jobs", "3"]);
+    let output = harness.run(&["--explain", "kit", "install", "--jobs", "3"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let output_text = stdout(&output);
     assert!(output_text.starts_with("jobs: 3\n\n"), "{output_text}");
-    assert!(
-        output_text.contains("install-all entry 1:"),
-        "{output_text}"
-    );
+    assert!(output_text.contains("kit entry 1:"), "{output_text}");
     assert!(
         output_text.contains(&format!(
             "command:  cargo install --path {} --force --features pcre2",
@@ -737,9 +743,9 @@ fn install_all_explain_prints_every_plan_without_running_installers() {
 }
 
 #[test]
-fn install_all_jobs_runs_multiple_installers_concurrently() {
+fn kit_jobs_runs_multiple_installers_concurrently() {
     let harness = Harness::new(&["cargo"]);
-    harness.write_install_all(
+    harness.write_kit(
         r#"
             [[install]]
             repospec = "./one"
@@ -752,7 +758,7 @@ fn install_all_jobs_runs_multiple_installers_concurrently() {
     );
 
     let output = harness
-        .command(&["ia", "-j", "2"])
+        .command(&["kit", "install", "-j", "2"])
         .env("DTR_TEST_PARALLEL_BARRIER", "2")
         .output()
         .unwrap();
@@ -764,9 +770,9 @@ fn install_all_jobs_runs_multiple_installers_concurrently() {
 }
 
 #[test]
-fn install_all_replays_narration_after_all_native_child_output() {
+fn kit_replays_narration_after_all_native_child_output() {
     let harness = Harness::new(&["cargo"]);
-    harness.write_install_all(
+    harness.write_kit(
         r#"
             [[install]]
             repospec = "./one"
@@ -779,7 +785,7 @@ fn install_all_replays_narration_after_all_native_child_output() {
     );
 
     let output = harness
-        .command(&["ia", "--jobs", "2"])
+        .command(&["kit", "install", "--jobs", "2"])
         .env("DTR_TEST_CHILD_STDERR", "native child output")
         .output()
         .unwrap();
@@ -815,14 +821,14 @@ fn install_all_replays_narration_after_all_native_child_output() {
 }
 
 #[test]
-fn install_all_replays_path_warnings_when_narration_is_disabled() {
+fn kit_replays_path_warnings_when_narration_is_disabled() {
     let harness = Harness::new(&["go"]);
     let install_directory = harness.work.join("go-bin");
     fs::create_dir(&install_directory).unwrap();
     write_executable(&install_directory.join("tool"));
     write_executable(&harness.bin.join("tool"));
     let path = env::join_paths([harness.bin.as_path(), install_directory.as_path()]).unwrap();
-    harness.write_install_all(
+    harness.write_kit(
         r#"
             [[install]]
             repospec = "owner/tool"
@@ -831,7 +837,7 @@ fn install_all_replays_path_warnings_when_narration_is_disabled() {
     );
 
     let output = harness
-        .command(&["--no-narration", "ia"])
+        .command(&["--no-narration", "kit", "install"])
         .env("PATH", path)
         .env("DTR_TEST_GO_GOBIN", &install_directory)
         .env("DTR_TEST_CHILD_STDERR", "native child output")
@@ -849,9 +855,9 @@ fn install_all_replays_path_warnings_when_narration_is_disabled() {
 }
 
 #[test]
-fn install_all_ctrl_c_allows_started_jobs_to_finish_then_replays_and_exits_130() {
+fn kit_ctrl_c_allows_started_jobs_to_finish_then_replays_and_exits_130() {
     let harness = Harness::new(&["cargo", "npm", "uv"]);
-    harness.write_install_all(
+    harness.write_kit(
         r#"
             [[install]]
             repospec = "./finished"
@@ -867,7 +873,7 @@ fn install_all_ctrl_c_allows_started_jobs_to_finish_then_replays_and_exits_130()
         "#,
     );
 
-    let mut command = harness.command(&["ia", "--jobs", "1"]);
+    let mut command = harness.command(&["kit", "install", "--jobs", "1"]);
     command
         .env("DTR_TEST_CHILD_STDERR", "native child output")
         .env(
@@ -944,9 +950,9 @@ fn install_all_ctrl_c_allows_started_jobs_to_finish_then_replays_and_exits_130()
 }
 
 #[test]
-fn install_all_second_ctrl_c_terminates_active_child_groups_and_exits_130() {
+fn kit_second_ctrl_c_terminates_active_child_groups_and_exits_130() {
     let harness = Harness::new(&["npm"]);
-    harness.write_install_all(
+    harness.write_kit(
         r#"
             [[install]]
             repospec = "./running"
@@ -954,7 +960,7 @@ fn install_all_second_ctrl_c_terminates_active_child_groups_and_exits_130() {
         "#,
     );
 
-    let mut command = harness.command(&["ia", "--jobs", "1"]);
+    let mut command = harness.command(&["kit", "install", "--jobs", "1"]);
     command
         .env("DTR_TEST_INTERRUPT_PROGRAM", "npm")
         .env("DTR_TEST_CHILD_STDERR", "native child output")
@@ -1020,22 +1026,27 @@ fn install_all_second_ctrl_c_terminates_active_child_groups_and_exits_130() {
 }
 
 #[test]
-fn install_all_jobs_help_and_zero_validation_are_explicit() {
+fn kit_help_and_jobs_validation_are_explicit() {
     let harness = Harness::new(&[]);
-    let help = harness.run(&["ia", "--help"]);
+    let help = harness.run(&["kit", "--help"]);
     assert!(help.status.success(), "{}", stderr(&help));
     let help_text = stdout(&help);
+    for subcommand in ["install", "list", "edit"] {
+        assert!(help_text.contains(subcommand), "{help_text}");
+    }
+
+    let install_help = harness.run(&["kit", "install", "--help"]);
+    assert!(install_help.status.success(), "{}", stderr(&install_help));
+    let help_text = stdout(&install_help);
     assert!(help_text.contains("-j, --jobs <n|auto>"), "{help_text}");
     assert!(help_text.contains("[default: auto]"), "{help_text}");
     assert!(
         help_text.contains("ceil(available CPU cores / 2)"),
         "{help_text}"
     );
-    assert!(help_text.contains("--list"), "{help_text}");
-    assert!(help_text.contains("--edit"), "{help_text}");
     assert!(help_text.contains("--file <FILE>"), "{help_text}");
 
-    let zero = harness.run(&["ia", "--jobs", "0"]);
+    let zero = harness.run(&["kit", "install", "--jobs", "0"]);
     assert_eq!(zero.status.code(), Some(2));
     assert!(stderr(&zero).contains("expected 'auto' or a positive integer"));
 }
@@ -1049,7 +1060,7 @@ fn install_add_tracks_a_successful_install_once_and_preserves_comments() {
 repospec = "owner/tool"
 tool = "go"
 "#;
-    harness.write_install_all(original);
+    harness.write_kit(original);
 
     let explain = harness.run(&[
         "--explain",
@@ -1063,10 +1074,7 @@ tool = "go"
     ]);
     assert!(explain.status.success(), "{}", stderr(&explain));
     assert!(stdout(&explain).contains("track:    "));
-    assert_eq!(
-        fs::read_to_string(harness.install_all_file()).unwrap(),
-        original
-    );
+    assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), original);
     assert!(!harness.was_invoked("cargo"));
 
     let arguments = [
@@ -1081,7 +1089,7 @@ tool = "go"
     let added = harness.run(&arguments);
     assert!(added.status.success(), "{}", stderr(&added));
     assert!(stderr(&added).contains("tracked:"), "{}", stderr(&added));
-    let config = fs::read_to_string(harness.install_all_file()).unwrap();
+    let config = fs::read_to_string(harness.kit_file()).unwrap();
     assert!(config.starts_with(original));
     assert_eq!(config.matches("[[install]]").count(), 2);
     assert!(config.contains("tool = \"cargo\""), "{config}");
@@ -1098,10 +1106,7 @@ tool = "go"
         "{}",
         stderr(&duplicate)
     );
-    assert_eq!(
-        fs::read_to_string(harness.install_all_file()).unwrap(),
-        config
-    );
+    assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), config);
 }
 
 #[test]
@@ -1114,13 +1119,13 @@ fn install_add_does_not_track_a_failed_install() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(17));
-    assert!(!harness.install_all_file().exists());
+    assert!(!harness.kit_file().exists());
 }
 
 #[test]
-fn install_all_list_uses_the_alternate_config_and_prints_reusable_commands() {
+fn kit_list_uses_the_alternate_config_and_prints_reusable_commands() {
     let harness = Harness::new(&[]);
-    let alternate = harness.work.join("alternate/install-all.toml");
+    let alternate = harness.work.join("alternate/kit.toml");
     fs::create_dir_all(alternate.parent().unwrap()).unwrap();
     fs::write(
         &alternate,
@@ -1141,7 +1146,7 @@ fn install_all_list_uses_the_alternate_config_and_prints_reusable_commands() {
     )
     .unwrap();
 
-    let output = harness.run(&["ia", "--list", "--file", alternate.to_str().unwrap()]);
+    let output = harness.run(&["kit", "list", "--file", alternate.to_str().unwrap()]);
     assert!(output.status.success(), "{}", stderr(&output));
     let home = home::home_dir().unwrap();
     assert_eq!(
@@ -1156,7 +1161,58 @@ fn install_all_list_uses_the_alternate_config_and_prints_reusable_commands() {
 }
 
 #[test]
-fn install_all_execution_uses_the_alternate_config() {
+fn default_kit_use_silently_renames_the_legacy_configuration() {
+    let harness = Harness::new(&[]);
+    let legacy = "[[install]]\nrepospec = \"owner/legacy\"\ntool = \"go\"\n";
+    harness.write_legacy_kit(legacy);
+
+    let output = harness.run(&["kit", "list"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "dtr install --tool go owner/legacy\n");
+    assert_eq!(stderr(&output), "");
+    assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), legacy);
+    assert!(!harness.legacy_kit_file().exists());
+}
+
+#[test]
+fn existing_kit_prevents_legacy_configuration_migration() {
+    let harness = Harness::new(&[]);
+    let legacy = "[[install]]\nrepospec = \"owner/legacy\"\ntool = \"go\"\n";
+    let current = "[[install]]\nrepospec = \"owner/current\"\ntool = \"go\"\n";
+    harness.write_legacy_kit(legacy);
+    harness.write_kit(current);
+
+    let output = harness.run(&["kit", "list"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "dtr install --tool go owner/current\n");
+    assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), current);
+    assert_eq!(
+        fs::read_to_string(harness.legacy_kit_file()).unwrap(),
+        legacy
+    );
+}
+
+#[test]
+fn kit_edit_explain_does_not_migrate_the_legacy_configuration() {
+    let harness = Harness::new(&["vim"]);
+    let legacy = "[[install]]\nrepospec = \"owner/legacy\"\ntool = \"go\"\n";
+    harness.write_legacy_kit(legacy);
+
+    let output = harness.run(&["--explain", "kit", "edit"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        format!("command:  vim {}\n", harness.kit_file().display())
+    );
+    assert!(!harness.kit_file().exists());
+    assert_eq!(
+        fs::read_to_string(harness.legacy_kit_file()).unwrap(),
+        legacy
+    );
+}
+
+#[test]
+fn kit_execution_uses_the_alternate_config() {
     let harness = Harness::new(&["cargo"]);
     let alternate = harness.work.join("alternate.toml");
     fs::write(
@@ -1165,21 +1221,28 @@ fn install_all_execution_uses_the_alternate_config() {
     )
     .unwrap();
 
-    let output = harness.run(&["ia", "--file", alternate.to_str().unwrap(), "--jobs", "1"]);
+    let output = harness.run(&[
+        "kit",
+        "install",
+        "--file",
+        alternate.to_str().unwrap(),
+        "--jobs",
+        "1",
+    ]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         harness.invocation("cargo").args,
         ["install", "--path", "./alternate tool"]
     );
-    assert!(!harness.install_all_file().exists());
+    assert!(!harness.kit_file().exists());
 }
 
 #[test]
-fn install_all_edit_honors_editor_precedence_and_arguments() {
+fn kit_edit_honors_editor_precedence_and_arguments() {
     let harness = Harness::new(&["dtr-editor", "visual-editor", "plain-editor"]);
-    let alternate = harness.work.join("nested/install-all.toml");
+    let alternate = harness.work.join("nested/kit.toml");
     let output = harness
-        .command(&["ia", "--edit", "--file", alternate.to_str().unwrap()])
+        .command(&["kit", "edit", "--file", alternate.to_str().unwrap()])
         .env("DTR_EDITOR", "dtr-editor --wait")
         .env("VISUAL", "visual-editor")
         .env("EDITOR", "plain-editor")
@@ -1196,13 +1259,13 @@ fn install_all_edit_honors_editor_precedence_and_arguments() {
 }
 
 #[test]
-fn install_all_edit_explain_is_read_only_and_falls_back_to_vim_before_vi() {
+fn kit_edit_explain_is_read_only_and_falls_back_to_vim_before_vi() {
     let explain = Harness::new(&["vim", "vi"]);
-    let alternate = explain.work.join("missing/install-all.toml");
+    let alternate = explain.work.join("missing/kit.toml");
     let output = explain.run(&[
         "--explain",
-        "ia",
-        "--edit",
+        "kit",
+        "edit",
         "--file",
         alternate.to_str().unwrap(),
     ]);
@@ -1216,17 +1279,17 @@ fn install_all_edit_explain_is_read_only_and_falls_back_to_vim_before_vi() {
     assert!(!alternate.parent().unwrap().exists());
 
     let execute = Harness::new(&["vim", "vi"]);
-    let output = execute.run(&["ia", "--edit"]);
+    let output = execute.run(&["kit", "edit"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(execute.was_invoked("vim"));
     assert!(!execute.was_invoked("vi"));
 }
 
 #[test]
-fn install_all_edit_prefers_visual_over_editor() {
+fn kit_edit_prefers_visual_over_editor() {
     let harness = Harness::new(&["visual-editor", "plain-editor"]);
     let output = harness
-        .command(&["ia", "--edit"])
+        .command(&["kit", "edit"])
         .env("VISUAL", "visual-editor --foreground")
         .env("EDITOR", "plain-editor")
         .output()
@@ -1234,30 +1297,30 @@ fn install_all_edit_prefers_visual_over_editor() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         harness.invocation("visual-editor").args,
-        ["--foreground", harness.install_all_file().to_str().unwrap()]
+        ["--foreground", harness.kit_file().to_str().unwrap()]
     );
     assert!(!harness.was_invoked("plain-editor"));
 }
 
 #[test]
-fn install_all_requires_a_valid_dedicated_configuration_file() {
+fn kit_requires_a_valid_dedicated_configuration_file() {
     let harness = Harness::new(&["cargo"]);
-    let missing = harness.run(&["ia"]);
+    let missing = harness.run(&["kit", "install"]);
     assert_eq!(missing.status.code(), Some(2));
     assert!(
-        stderr(&missing).contains("could not read install-all configuration"),
+        stderr(&missing).contains("could not read kit configuration"),
         "{}",
         stderr(&missing)
     );
 
-    harness.write_install_all(
+    harness.write_kit(
         r#"
             [[install]]
             repospec = "./tool"
             feature = "pcre2"
         "#,
     );
-    let malformed = harness.run(&["ia"]);
+    let malformed = harness.run(&["kit", "install"]);
     assert_eq!(malformed.status.code(), Some(2));
     assert!(stderr(&malformed).contains("unknown field `feature`"));
     assert!(!harness.was_invoked("cargo"));

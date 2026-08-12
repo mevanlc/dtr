@@ -10,7 +10,7 @@ use std::thread;
 
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{InstallAllArgs, InstallArgs, InstallTool, Jobs};
+use crate::cli::{InstallArgs, InstallTool, Jobs, KitArgs, KitCommand};
 use crate::command::{CommandPlan, DtrMessage, InterruptState, command_exists, shell_quote};
 use crate::config::{self, Config};
 use crate::error::DtrError;
@@ -19,7 +19,7 @@ use crate::resolve::plan_install;
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct InstallAllConfig {
+struct KitConfig {
     #[serde(default)]
     install: Vec<InstallEntry>,
 }
@@ -40,7 +40,7 @@ struct InstallEntry {
 }
 
 struct LoadedConfig {
-    config: InstallAllConfig,
+    config: KitConfig,
     text: String,
 }
 
@@ -56,7 +56,7 @@ struct InstallJobResult {
     messages: Vec<DtrMessage>,
 }
 
-struct InstallAllExecution {
+struct KitExecution {
     failed: bool,
     interrupted: bool,
 }
@@ -98,9 +98,7 @@ impl InstallEntry {
                 args.repospec
                     .to_str()
                     .ok_or_else(|| {
-                        DtrError::new(
-                            "install-all.toml cannot store a non-UTF-8 repository reference",
-                        )
+                        DtrError::new("kit.toml cannot store a non-UTF-8 repository reference")
                     })?
                     .to_owned(),
                 None,
@@ -111,7 +109,7 @@ impl InstallEntry {
             .iter()
             .map(|argument| {
                 argument.to_str().map(str::to_owned).ok_or_else(|| {
-                    DtrError::new("install-all.toml cannot store a non-UTF-8 installer argument")
+                    DtrError::new("kit.toml cannot store a non-UTF-8 installer argument")
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -137,17 +135,22 @@ fn is_false(value: &bool) -> bool {
 }
 
 pub(crate) fn run(
-    args: InstallAllArgs,
+    args: KitArgs,
     explain: bool,
     narration_override: Option<bool>,
 ) -> Result<i32, DtrError> {
-    let path = selected_file_path(args.file)?;
-    if args.list {
-        return list(&path);
-    }
-    if args.edit {
-        return edit(&path, explain, narration_override);
-    }
+    let args = match args.command {
+        KitCommand::List(args) => return list(&selected_file_path(args.file, !explain)?),
+        KitCommand::Edit(args) => {
+            return edit(
+                &selected_file_path(args.file, !explain)?,
+                explain,
+                narration_override,
+            );
+        }
+        KitCommand::Install(args) => args,
+    };
+    let path = selected_file_path(args.file, !explain)?;
 
     let config = load_required(&path)?.config;
     let requested_jobs = args.jobs;
@@ -212,7 +215,7 @@ pub(crate) fn run(
 
         if explain {
             println!();
-            println!("install-all entry {number}:");
+            println!("kit entry {number}:");
             plan.explain();
             continue;
         }
@@ -232,7 +235,7 @@ pub(crate) fn run(
             preflight_results,
             interrupted
                 .as_deref()
-                .expect("live install-all runs install an interrupt handler"),
+                .expect("live kit runs install an interrupt handler"),
         );
         if execution.interrupted {
             return Ok(130);
@@ -250,7 +253,11 @@ pub(crate) fn run_install_and_add(
     explain: bool,
     narration_override: Option<bool>,
 ) -> Result<i32, DtrError> {
-    let path = config::install_all_file_path()?;
+    let path = if explain {
+        config::kit_file_path()?
+    } else {
+        config::migrate_legacy_kit_file()?
+    };
     let _ = load_optional(&path)?;
     let home = home::home_dir();
     let (mut entry, local_path) = InstallEntry::from_install_args(&args, home.as_deref())?;
@@ -300,7 +307,7 @@ fn execute_jobs(
     narration: bool,
     initial_results: Vec<InstallJobResult>,
     interrupted: &InterruptState,
-) -> InstallAllExecution {
+) -> KitExecution {
     let worker_count = job_count.min(jobs.len());
     let queue = Mutex::new(VecDeque::from(jobs));
     let results = Mutex::new(initial_results);
@@ -314,7 +321,7 @@ fn execute_jobs(
                     }
                     let job = queue
                         .lock()
-                        .expect("install-all work queue should not be poisoned")
+                        .expect("kit work queue should not be poisoned")
                         .pop_front();
                     let Some(job) = job else {
                         break;
@@ -325,7 +332,7 @@ fn execute_jobs(
                     let result = execute_job(&job, narration, interrupted);
                     results
                         .lock()
-                        .expect("install-all results should not be poisoned")
+                        .expect("kit results should not be poisoned")
                         .push(result);
                 }
             });
@@ -334,7 +341,7 @@ fn execute_jobs(
 
     let mut results = results
         .into_inner()
-        .expect("install-all results should not be poisoned");
+        .expect("kit results should not be poisoned");
     results.sort_by_key(|result| result.number);
     let failed = results.iter().any(|result| !result.succeeded);
     for result in results {
@@ -342,7 +349,7 @@ fn execute_jobs(
             message.emit();
         }
     }
-    InstallAllExecution {
+    KitExecution {
         failed,
         interrupted: interrupted.is_interrupted(),
     }
@@ -364,7 +371,7 @@ fn execute_job(
             Ok(0) => true,
             Ok(code) => {
                 let warning = format!(
-                    "dtr: warning: install-all entry {} ({:?}) exited with status {code}",
+                    "dtr: warning: kit entry {} ({:?}) exited with status {code}",
                     job.number, job.repospec
                 );
                 eprintln!("{warning}");
@@ -402,9 +409,16 @@ fn install_interrupt_handler() -> Result<Arc<InterruptState>, DtrError> {
     Ok(interrupted)
 }
 
-fn selected_file_path(alternate: Option<PathBuf>) -> Result<PathBuf, DtrError> {
+fn selected_file_path(
+    alternate: Option<PathBuf>,
+    migrate_legacy: bool,
+) -> Result<PathBuf, DtrError> {
     let Some(path) = alternate else {
-        return config::install_all_file_path();
+        return if migrate_legacy {
+            config::migrate_legacy_kit_file()
+        } else {
+            config::kit_file_path()
+        };
     };
     if path.as_os_str().is_empty() {
         return Err(DtrError::new("--file must not be empty"));
@@ -422,7 +436,7 @@ fn load_required(path: &Path) -> Result<LoadedConfig, DtrError> {
     let loaded = load_config(path, false)?;
     if loaded.config.install.is_empty() {
         return Err(DtrError::new(format!(
-            "install-all configuration {} must contain at least one [[install]] entry",
+            "kit configuration {} must contain at least one [[install]] entry",
             path.display()
         )));
     }
@@ -438,20 +452,20 @@ fn load_config(path: &Path, missing_ok: bool) -> Result<LoadedConfig, DtrError> 
         Ok(text) => text,
         Err(error) if missing_ok && error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(LoadedConfig {
-                config: InstallAllConfig::default(),
+                config: KitConfig::default(),
                 text: String::new(),
             });
         }
         Err(error) => {
             return Err(DtrError::new(format!(
-                "could not read install-all configuration {}: {error}",
+                "could not read kit configuration {}: {error}",
                 path.display()
             )));
         }
     };
     let config = toml::from_str(&text).map_err(|error| {
         DtrError::new(format!(
-            "could not parse install-all configuration {}: {error}",
+            "could not parse kit configuration {}: {error}",
             path.display()
         ))
     })?;
@@ -588,9 +602,9 @@ fn tracked_local_path(path: &Path, home: Option<&Path>) -> Result<String, DtrErr
 }
 
 fn path_text(path: &Path) -> Result<String, DtrError> {
-    path.to_str().map(friendly_windows_path).ok_or_else(|| {
-        DtrError::new("install-all.toml cannot store a non-UTF-8 local repository path")
-    })
+    path.to_str()
+        .map(friendly_windows_path)
+        .ok_or_else(|| DtrError::new("kit.toml cannot store a non-UTF-8 local repository path"))
 }
 
 fn display_path(path: &Path) -> String {
@@ -625,9 +639,10 @@ fn append_entry(mut text: String, entry: &InstallEntry) -> Result<String, DtrErr
         }
     }
     text.push_str("[[install]]\n");
-    text.push_str(&toml::to_string(entry).map_err(|error| {
-        DtrError::new(format!("could not serialize install-all entry: {error}"))
-    })?);
+    text.push_str(
+        &toml::to_string(entry)
+            .map_err(|error| DtrError::new(format!("could not serialize kit entry: {error}")))?,
+    );
     Ok(text)
 }
 
@@ -667,7 +682,7 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), DtrError> {
     })?;
     temporary.persist(path).map_err(|error| {
         DtrError::new(format!(
-            "could not replace install-all configuration {}: {}",
+            "could not replace kit configuration {}: {}",
             path.display(),
             error.error
         ))
@@ -699,7 +714,7 @@ fn expand_home(repospec: String, home: Option<&Path>) -> Result<OsString, DtrErr
 }
 
 fn entry_warning(number: usize, repospec: &str, error: &DtrError) -> String {
-    format!("dtr: warning: install-all entry {number} ({repospec:?}): {error}")
+    format!("dtr: warning: kit entry {number} ({repospec:?}): {error}")
 }
 
 #[cfg(test)]
@@ -709,7 +724,7 @@ mod tests {
 
     #[test]
     fn config_accepts_native_args_and_rust_alias() {
-        let config: InstallAllConfig = toml::from_str(
+        let config: KitConfig = toml::from_str(
             r#"
                 [[install]]
                 repospec = "~/p/my/ripgrep"
@@ -725,7 +740,7 @@ mod tests {
 
     #[test]
     fn config_rejects_unknown_fields() {
-        let error = toml::from_str::<InstallAllConfig>(
+        let error = toml::from_str::<KitConfig>(
             r#"
                 [[install]]
                 repospec = "./tool"
@@ -802,7 +817,7 @@ mod tests {
     fn windows_tracking_narration_uses_friendly_native_paths() {
         let repository = Path::new(r"\\?\C:\Users\mclark\p\my\gitoverit");
         let home = Path::new(r"\\?\C:\Users\mclark");
-        let config = Path::new(r"C:\Users\mclark\.config\dtr\install-all.toml");
+        let config = Path::new(r"C:\Users\mclark\.config\dtr\kit.toml");
 
         assert_eq!(
             tracked_local_path(repository, Some(home)).unwrap(),
@@ -810,7 +825,7 @@ mod tests {
         );
         assert_eq!(
             tracked_message(&display_path(repository), config),
-            r"tracked: C:\Users\mclark\p\my\gitoverit → C:\Users\mclark\.config\dtr\install-all.toml"
+            r"tracked: C:\Users\mclark\p\my\gitoverit → C:\Users\mclark\.config\dtr\kit.toml"
         );
     }
 }

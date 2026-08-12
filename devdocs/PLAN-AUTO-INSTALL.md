@@ -1,6 +1,6 @@
 # dtr automatic install tool selection plan
 
-Status: implemented and validated on macOS (2026-07-23)
+Status: implemented and validated on macOS (2026-07-23; kit follow-up 2026-08-11)
 
 Roadmap: completed post-[first MVP](FIRST-MVP.md) increment
 
@@ -32,16 +32,25 @@ An explicit non-auto tool preserves the established backend mappings and skips
 repository inspection. Native installer arguments retain the existing `--`
 boundary and backend-specific safety checks.
 
-`--add` retains normal install planning and execution, then appends the exact
-successful request to the default `install-all.toml`. Local paths are stored
-canonically, auto selection is replaced by the resolved backend, exact duplicate
-entries are ignored, and existing file text is preserved. Explain mode reports
-the target without mutating it; failed installs are not tracked.
+※ `--add` originally appended successful requests to `install-all.toml`, and
+the collection was managed by the top-level `install-all|ia` command with
+`--list` and `--edit` action flags. The current interface stores the collection
+in `kit.toml` and exposes `dtr kit install`, `dtr kit list`, and `dtr kit edit`
+without compatibility aliases for the former CLI. On first non-explain use of
+the default file, it silently renames `install-all.toml` only when `kit.toml` is
+absent; an existing `kit.toml`, explain mode, and explicit `--file` paths do not
+trigger migration.
 
-Install-all retains native child output and immediate narration while jobs run,
-then replays dtr command, install-success, and warning messages in configuration
-order after all jobs complete. PATH warnings are replayed even when narration is
-disabled.
+`--add` retains normal install planning and execution, then appends the exact
+successful request to the default `kit.toml`. Local paths are stored canonically,
+auto selection is replaced by the resolved backend, exact duplicate entries are
+ignored, and existing file text is preserved. Explain mode reports the target
+without mutating it; failed installs are not tracked.
+
+`dtr kit install` retains native child output and immediate narration while jobs
+run, then replays dtr command, install-success, and warning messages in
+configuration order after all jobs complete. PATH warnings are replayed even
+when narration is disabled.
 
 The first Ctrl-C stops new job dispatch while allowing active child processes to
 finish normally. Dtr emits the accumulated replay only after they finish,
@@ -148,7 +157,7 @@ values remain absent from explain output and diagnostics.
 ```text
 src/cli.rs             InstallTool values, default, alias, and argument shape
 src/install_detect.rs  marker inference and local/API/Git root inspection
-src/install_all.rs     successful-install tracking and install-all management
+src/kit.rs             successful-install tracking and kit management
 src/resolve.rs         one-time repospec/auth resolution and backend dispatch
 src/repospec.rs        inspection-safe remote normalization
 src/github_auth.rs     reusable process-scoped Git environment
@@ -176,9 +185,16 @@ remain byte-safe where the underlying platform permits non-UTF-8 paths.
 13. [x] Add install-only Go version queries without changing clone semantics.
 14. [x] Default an omitted install repository reference to the current directory.
 15. [x] Detect local Go command subdirectories through a Git-bounded ancestor module lookup.
-16. [x] Track successful installs in the install-all configuration with `--add`.
+16. [x] ※ Track successful installs in the original install-all configuration with `--add`.
+17. [x] Rename that collection to the `kit` command namespace and `kit.toml`.
 
 ## Validation record
+
+The kit namespace follow-up was validated on macOS on 2026-08-11:
+
+- `just check` passed formatting, warnings-as-errors Clippy, all 195 nextest
+  tests, locked `cargo check`, `actionlint`, and `git diff --check`.
+- The migrated default `kit.toml` loaded successfully through `dtr kit list`.
 
 Validated on macOS on 2026-07-23:
 
