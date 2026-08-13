@@ -389,10 +389,13 @@ updated without installing or writing it.
 ## Manage an installation kit
 
 ```text
-dtr [--explain|-n] [--narration|--no-narration] kit install [-j|--jobs <n|auto>] [-q|--quiet] [--file <FILE>]
-dtr kit list [--file <FILE>]
-dtr [--explain|-n] kit edit [--file <FILE>]
+dtr [--explain|-n] [--narration|--no-narration] kit|k install|i [-j|--jobs <n|auto>] [-q|--quiet] [--file <FILE>]
+dtr kit|k list|ls [--file <FILE>]
+dtr [--explain|-n] kit|k edit [--file <FILE>]
 ```
+
+`k` is a visible alias for `kit`; within that namespace, `i` aliases `install`
+and `ls` aliases `list`. The aliases can be combined as `dtr k i` and `dtr k ls`.
 
 `kit install` reads `<user-home>/.config/dtr/kit.toml` and plans each
 `[[install]]` entry in file order. `DTR_CONFIG_DIR` overrides the containing

@@ -41,6 +41,7 @@ pub(crate) enum DtrCommand {
     Install(InstallArgs),
 
     /// Manage the configured installation kit
+    #[command(visible_alias = "k")]
     Kit(KitArgs),
 
     /// Read or change dtr configuration
@@ -90,9 +91,11 @@ pub(crate) struct KitArgs {
 #[derive(Debug, Subcommand)]
 pub(crate) enum KitCommand {
     /// Install every repository in the kit
+    #[command(visible_alias = "i")]
     Install(KitInstallArgs),
 
     /// List kit entries as reusable dtr install commands
+    #[command(visible_alias = "ls")]
     List(KitFileArgs),
 
     /// Edit the kit configuration
@@ -270,6 +273,21 @@ mod tests {
         let cli =
             Cli::try_parse_from(["dtr", "i", "--tool", "go", "owner/repo"]).expect("valid command");
         assert!(matches!(cli.command, DtrCommand::Install(_)));
+    }
+
+    #[test]
+    fn kit_aliases_are_accepted() {
+        let install = Cli::try_parse_from(["dtr", "k", "i"]).expect("valid kit install alias");
+        let DtrCommand::Kit(args) = install.command else {
+            panic!("expected kit command");
+        };
+        assert!(matches!(args.command, KitCommand::Install(_)));
+
+        let list = Cli::try_parse_from(["dtr", "k", "ls"]).expect("valid kit list alias");
+        let DtrCommand::Kit(args) = list.command else {
+            panic!("expected kit command");
+        };
+        assert!(matches!(args.command, KitCommand::List(_)));
     }
 
     #[test]

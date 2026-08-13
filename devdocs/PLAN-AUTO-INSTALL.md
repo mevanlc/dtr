@@ -41,6 +41,9 @@ the default file, it silently renames `install-all.toml` only when `kit.toml` is
 absent; an existing `kit.toml`, explain mode, and explicit `--file` paths do not
 trigger migration.
 
+The current command hierarchy has visible shorthand aliases: `dtr k` for
+`dtr kit`, `dtr k i` for `dtr kit install`, and `dtr k ls` for `dtr kit list`.
+
 `--add` retains normal install planning and execution, then appends the exact
 successful request to the default `kit.toml`. Local paths are stored canonically;
 Windows storage uses native separators without the `\\?\` prefix. Auto selection
@@ -194,8 +197,16 @@ remain byte-safe where the underlying platform permits non-UTF-8 paths.
 15. [x] Detect local Go command subdirectories through a Git-bounded ancestor module lookup.
 16. [x] ※ Track successful installs in the original install-all configuration with `--add`.
 17. [x] Rename that collection to the `kit` command namespace and `kit.toml`.
+18. [x] Add visible `k`, `k i`, and `k ls` aliases for the kit command hierarchy.
 
 ## Validation record
+
+The kit-alias follow-up was validated on macOS on 2026-08-12:
+
+- `just check` passed formatting, warnings-as-errors Clippy, all 199 nextest
+  tests, locked `cargo check`, `actionlint`, and `git diff --check`.
+- End-to-end coverage exercised `dtr k i` and `dtr k ls` and confirmed that the
+  `k`, `i`, and `ls` aliases appear in generated help.
 
 The kit namespace follow-up was validated on macOS on 2026-08-11:
 

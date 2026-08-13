@@ -643,6 +643,40 @@ fn config_list_prints_configured_values_or_names() {
 }
 
 #[test]
+fn kit_aliases_are_visible_and_execute() {
+    let harness = Harness::new(&["cargo"]);
+    let repo = harness.local_repository("aliased-tool", &["Cargo.toml"], &[]);
+    harness.write_kit(&format!(
+        r#"
+            [[install]]
+            repospec = {repo:?}
+            tool = "cargo"
+        "#,
+    ));
+
+    let root_help = harness.run(&["--help"]);
+    assert!(root_help.status.success(), "{}", stderr(&root_help));
+    assert!(stdout(&root_help).contains("[alias: k]"));
+
+    let kit_help = harness.run(&["k", "--help"]);
+    assert!(kit_help.status.success(), "{}", stderr(&kit_help));
+    let help_text = stdout(&kit_help);
+    assert!(help_text.contains("[alias: i]"), "{help_text}");
+    assert!(help_text.contains("[alias: ls]"), "{help_text}");
+
+    let list = harness.run(&["k", "ls"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    assert_eq!(stdout(&list), "dtr install --tool cargo ./aliased-tool\n");
+
+    let install = harness.run(&["k", "i"]);
+    assert!(install.status.success(), "{}", stderr(&install));
+    assert_eq!(
+        harness.invocation("cargo").args,
+        ["install", "--path", "./aliased-tool"]
+    );
+}
+
+#[test]
 fn kit_runs_configured_backends_and_forwards_cargo_features() {
     let harness = Harness::new(&["cargo", "go"]);
     let cargo_repo = harness.work.join("ripgrep");
