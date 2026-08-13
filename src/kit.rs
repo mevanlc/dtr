@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use serde::{Deserialize, Serialize};
+use toml_edit::{Array, DocumentMut, Item, Table, Value, value};
 
 use crate::cli::{InstallArgs, InstallTool, Jobs, KitArgs, KitCommand};
 use crate::command::{
@@ -17,7 +18,7 @@ use crate::command::{
 };
 use crate::config::{self, Config};
 use crate::error::DtrError;
-use crate::repospec::InstallSource;
+use crate::repospec::{InstallSource, RepositoryIdentity};
 use crate::resolve::plan_install;
 
 #[derive(Default, Deserialize)]
@@ -291,21 +292,25 @@ pub(crate) fn run_install_and_add(
     }
 
     let loaded = load_optional(&path)?;
-    let already_tracked = loaded.config.install.contains(&entry);
-    if !already_tracked {
-        let text = append_entry(loaded.text, &entry)?;
+    let identity = normalized_repository_identity(&entry, home.as_deref())?;
+    let existing = loaded.config.install.iter().position(|tracked| {
+        normalized_repository_identity(tracked, home.as_deref())
+            .is_ok_and(|tracked| tracked == identity)
+    });
+    let changed = existing.is_none_or(|index| loaded.config.install[index] != entry);
+    if changed {
+        let text = match existing {
+            Some(index) => replace_entry(loaded.text, index, &entry)?,
+            None => append_entry(loaded.text, &entry)?,
+        };
         write_atomic(&path, &text)?;
     }
-    if narration {
+    if narration && existing.is_none() {
         let repospec = local_path
             .as_deref()
             .map(display_path)
             .unwrap_or_else(|| entry.repospec.clone());
-        if already_tracked {
-            eprintln!("already tracked: {repospec}");
-        } else {
-            eprintln!("{}", tracked_message(&repospec, &path));
-        }
+        eprintln!("{}", tracked_message(&repospec, &path));
     }
     Ok(0)
 }
@@ -474,13 +479,80 @@ fn load_config(path: &Path, missing_ok: bool) -> Result<LoadedConfig, DtrError> 
             )));
         }
     };
-    let config = toml::from_str(&text).map_err(|error| {
+    let config: KitConfig = toml::from_str(&text).map_err(|error| {
         DtrError::new(format!(
             "could not parse kit configuration {}: {error}",
             path.display()
         ))
     })?;
+    validate_unique_repositories(&config, path, home::home_dir().as_deref())?;
     Ok(LoadedConfig { config, text })
+}
+
+fn validate_unique_repositories(
+    config: &KitConfig,
+    path: &Path,
+    home: Option<&Path>,
+) -> Result<(), DtrError> {
+    let mut seen = HashMap::new();
+    for (offset, entry) in config.install.iter().enumerate() {
+        let Ok(identity) = normalized_repository_identity(entry, home) else {
+            // Repospec errors remain per-entry planning errors so one bad entry
+            // does not prevent the rest of a kit from running.
+            continue;
+        };
+        if let Some((first_offset, first_repospec)) =
+            seen.insert(identity, (offset, entry.repospec.as_str()))
+        {
+            return Err(DtrError::new(format!(
+                "kit configuration {} has duplicate repositories: [[install]] entries {} ({first_repospec:?}) and {} ({:?}) have the same normalized repospec",
+                path.display(),
+                first_offset + 1,
+                offset + 1,
+                entry.repospec
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn normalized_repository_identity(
+    entry: &InstallEntry,
+    home: Option<&Path>,
+) -> Result<RepositoryIdentity, DtrError> {
+    let repospec = expand_home(entry.repospec.clone(), home)?;
+    let identity = InstallSource::parse(&repospec)?.spec.repository_identity();
+    Ok(match identity {
+        RepositoryIdentity::Local(path) => RepositoryIdentity::Local(normalize_local_path(&path)),
+        identity => identity,
+    })
+}
+
+fn normalize_local_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return canonical;
+    }
+
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else if let Ok(current) = env::current_dir() {
+        current.join(path)
+    } else {
+        path.to_path_buf()
+    };
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn list(path: &Path) -> Result<i32, DtrError> {
@@ -638,6 +710,57 @@ fn append_entry(mut text: String, entry: &InstallEntry) -> Result<String, DtrErr
             .map_err(|error| DtrError::new(format!("could not serialize kit entry: {error}")))?,
     );
     Ok(text)
+}
+
+fn replace_entry(text: String, index: usize, entry: &InstallEntry) -> Result<String, DtrError> {
+    let mut document = text.parse::<DocumentMut>().map_err(|error| {
+        DtrError::new(format!(
+            "could not edit the existing kit configuration: {error}"
+        ))
+    })?;
+    let table = document
+        .get_mut("install")
+        .and_then(Item::as_array_of_tables_mut)
+        .and_then(|entries| entries.get_mut(index))
+        .ok_or_else(|| DtrError::new("could not locate the existing kit entry to update"))?;
+
+    set_table_value(table, "repospec", Value::from(entry.repospec.as_str()));
+    set_optional_table_value(
+        table,
+        "tool",
+        (entry.tool != InstallTool::Auto).then(|| Value::from(entry.tool.to_string())),
+    );
+    set_optional_table_value(
+        table,
+        "no_latest",
+        entry.no_latest.then(|| Value::from(true)),
+    );
+    set_optional_table_value(
+        table,
+        "args",
+        (!entry.args.is_empty())
+            .then(|| Value::Array(Array::from_iter(entry.args.iter().map(String::as_str)))),
+    );
+    Ok(document.to_string())
+}
+
+fn set_optional_table_value(table: &mut Table, key: &str, new_value: Option<Value>) {
+    if let Some(new_value) = new_value {
+        set_table_value(table, key, new_value);
+    } else {
+        table.remove(key);
+    }
+}
+
+fn set_table_value(table: &mut Table, key: &str, mut new_value: Value) {
+    if let Some(item) = table.get_mut(key) {
+        if let Some(old_value) = item.as_value() {
+            *new_value.decor_mut() = old_value.decor().clone();
+        }
+        *item = Item::Value(new_value);
+    } else {
+        table.insert(key, value(new_value));
+    }
 }
 
 fn write_atomic(path: &Path, text: &str) -> Result<(), DtrError> {

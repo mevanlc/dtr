@@ -377,9 +377,11 @@ default `kit.toml`:
 dtr install --add --tool cargo ./my-tool -- --force --features color
 ```
 
-Dtr validates the existing file before starting the installer and appends a new
-`[[install]]` table only after the installer succeeds. An exact duplicate is not
-added twice. Existing comments and formatting remain intact. Local paths are
+Dtr validates the existing file before starting the installer and records the
+request only after the installer succeeds. A new normalized repository is
+appended; an existing entry for the same normalized repository is silently
+updated in place, including its tool and arguments. Unchanged comments and
+surrounding formatting remain intact. Local paths are
 canonicalized; Unix paths below the user home directory are stored with `~/`,
 while Windows paths are stored without a `\\?\` prefix and use `\` separators;
 an automatically selected backend is recorded explicitly so later batch runs
@@ -431,7 +433,9 @@ Each entry requires `repospec`. It accepts the same repository references as
 `dtr install`, plus a leading `~/` for a path below the user home directory.
 `tool` defaults to `auto` and accepts the normal install tool values. `no_latest`
 defaults to `false`, and `args` is an array of native installer arguments with
-the same validation as arguments following `dtr install ... --`.
+the same validation as arguments following `dtr install ... --`. A kit may have
+only one entry for each normalized repository; equivalent local paths and remote
+repository spellings count as the same repository.
 
 For example, this rebuilds one Cargo repository with its default features and
 ripgrep with PCRE2 enabled:

@@ -47,6 +47,13 @@ pub(crate) struct InstallSource {
     pub(crate) go_query: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum RepositoryIdentity {
+    Local(PathBuf),
+    Remote { authority: String, path: String },
+    GithubMine(String),
+}
+
 impl InstallSource {
     pub(crate) fn parse(value: &OsStr) -> Result<Self, DtrError> {
         let path = Path::new(value);
@@ -439,6 +446,39 @@ impl RepoSpec {
         match self {
             Self::Local { path } => Some(path),
             _ => None,
+        }
+    }
+
+    pub(crate) fn repository_identity(&self) -> RepositoryIdentity {
+        match self {
+            Self::Local { path } => RepositoryIdentity::Local(path.clone()),
+            Self::Forge {
+                forge,
+                host,
+                namespace,
+                repo,
+                ..
+            } => {
+                let mut path = format!("{}/{repo}", namespace.join("/"));
+                if *forge == Forge::GitHub {
+                    path.make_ascii_lowercase();
+                }
+                RepositoryIdentity::Remote {
+                    authority: host.to_ascii_lowercase(),
+                    path,
+                }
+            }
+            Self::GitUrl {
+                authority, path, ..
+            } => RepositoryIdentity::Remote {
+                authority: authority.to_ascii_lowercase(),
+                path: path.clone(),
+            },
+            Self::ScpLike { host, path, .. } => RepositoryIdentity::Remote {
+                authority: host.to_ascii_lowercase(),
+                path: path.clone(),
+            },
+            Self::GithubMine { repo } => RepositoryIdentity::GithubMine(repo.to_ascii_lowercase()),
         }
     }
 }
@@ -936,6 +976,19 @@ mod tests {
                 .to_str(),
             Some("https://github.com/mevanlc/tool.git")
         );
+    }
+
+    #[test]
+    fn repository_identity_normalizes_equivalent_remote_spellings() {
+        let expected = parse("owner/tool").repository_identity();
+        for value in [
+            "Owner/Tool",
+            "https://github.com/owner/tool.git/",
+            "git@github.com:owner/tool.git",
+            "ssh://git@github.com/owner/tool.git",
+        ] {
+            assert_eq!(parse(value).repository_identity(), expected, "{value}");
+        }
     }
 
     #[test]

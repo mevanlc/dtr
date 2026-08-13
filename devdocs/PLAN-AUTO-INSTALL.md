@@ -44,12 +44,14 @@ trigger migration.
 The current command hierarchy has visible shorthand aliases: `dtr k` for
 `dtr kit`, `dtr k i` for `dtr kit install`, and `dtr k ls` for `dtr kit list`.
 
-`--add` retains normal install planning and execution, then appends the exact
-successful request to the default `kit.toml`. Local paths are stored canonically;
-Windows storage uses native separators without the `\\?\` prefix. Auto selection
-is replaced by the resolved backend, exact duplicate entries are ignored, and
-existing file text is preserved. Explain mode reports the target without
-mutating it; failed installs are not tracked.
+`--add` retains normal install planning and execution, then records the successful
+request in the default `kit.toml`. Local paths are stored canonically; Windows
+storage uses native separators without the `\\?\` prefix. Auto selection is
+replaced by the resolved backend. A new normalized repository is appended, while
+an existing entry for the same repository is silently updated in place. Kit files
+reject multiple entries with the same normalized repository identity. Existing
+file text is preserved. Explain mode reports the target without mutating it;
+failed installs are not tracked.
 
 ※ `dtr kit install` originally always retained native child output. It now
 accepts a counted `-q`/`--quiet`: one occurrence suppresses installer stdout and

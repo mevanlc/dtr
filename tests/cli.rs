@@ -1200,12 +1200,48 @@ tool = "go"
 
     let duplicate = harness.run(&arguments);
     assert!(duplicate.status.success(), "{}", stderr(&duplicate));
-    assert!(
-        stderr(&duplicate).contains("already tracked:"),
-        "{}",
-        stderr(&duplicate)
-    );
+    assert!(!stderr(&duplicate).contains("tracked:"));
     assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), config);
+}
+
+#[test]
+fn install_add_silently_replaces_the_entry_for_the_same_repository() {
+    let harness = Harness::new(&["cargo"]);
+    let first = harness.run(&[
+        "--no-narration",
+        "i",
+        "-at",
+        "cargo",
+        "--",
+        "--features",
+        "feat_os_unix,uudoc",
+    ]);
+    assert!(first.status.success(), "{}", stderr(&first));
+
+    let original = fs::read_to_string(harness.kit_file()).unwrap();
+    let with_comment = original.replacen("[[install]]", "# keep this comment\n[[install]]", 1);
+    fs::write(harness.kit_file(), with_comment).unwrap();
+
+    let second = harness.run(&[
+        "--no-narration",
+        "i",
+        "-at",
+        "cargo",
+        "--",
+        "--features",
+        "feat_os_unix",
+    ]);
+    assert!(second.status.success(), "{}", stderr(&second));
+    assert_eq!(stderr(&second), "");
+
+    let config = fs::read_to_string(harness.kit_file()).unwrap();
+    assert_eq!(config.matches("[[install]]").count(), 1, "{config}");
+    assert!(config.contains("# keep this comment"), "{config}");
+    assert!(
+        config.contains(r#"args = ["--features", "feat_os_unix"]"#),
+        "{config}"
+    );
+    assert!(!config.contains("uudoc"), "{config}");
 }
 
 #[test]
@@ -1423,6 +1459,34 @@ fn kit_requires_a_valid_dedicated_configuration_file() {
     assert_eq!(malformed.status.code(), Some(2));
     assert!(stderr(&malformed).contains("unknown field `feature`"));
     assert!(!harness.was_invoked("cargo"));
+}
+
+#[test]
+fn kit_rejects_duplicate_normalized_repository_entries() {
+    let harness = Harness::new(&["cargo", "go"]);
+    harness.write_kit(
+        r#"
+            [[install]]
+            repospec = "Owner/Tool"
+            tool = "cargo"
+            args = ["--features", "one"]
+
+            [[install]]
+            repospec = "https://github.com/owner/tool.git/"
+            tool = "go"
+            args = ["two"]
+        "#,
+    );
+
+    let output = harness.run(&["kit", "install"]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = stderr(&output);
+    assert!(stderr.contains("duplicate repositories"), "{stderr}");
+    assert!(stderr.contains("entries 1"), "{stderr}");
+    assert!(stderr.contains("and 2"), "{stderr}");
+    assert!(stderr.contains("same normalized repospec"), "{stderr}");
+    assert!(!harness.was_invoked("cargo"));
+    assert!(!harness.was_invoked("go"));
 }
 
 #[test]
