@@ -1799,13 +1799,24 @@ fn github_url_prefers_gh_and_normalizes_a_trailing_slash() {
 }
 
 #[test]
-fn forge_clone_strips_repository_url_fragments() {
+fn forge_clone_strips_repository_url_decorations() {
     let github = Harness::new(&["git", "gh"]);
     let output = github.run(&["clone", "https://github.com/owner/repo.git/#installation"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         github.invocation("gh").args,
         ["repo", "clone", "https://github.com/owner/repo.git"]
+    );
+
+    let github_browser = Harness::new(&["git", "gh"]);
+    let output = github_browser.run(&[
+        "clone",
+        "https://github.com/owner/repo/issues/123?notification_referrer_id=1",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        github_browser.invocation("gh").args,
+        ["repo", "clone", "https://github.com/owner/repo"]
     );
 
     let gitlab = Harness::new(&["git", "glab"]);

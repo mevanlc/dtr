@@ -113,6 +113,8 @@ release actions and were not performed by this roadmap closure.
   selection, forge API inspection, and filtered Git fallback.
 - `gcl` clone-compatibility follow-up: repository-root fragment stripping,
   `-U` / `--upstream-remote-name`, and forge-aware GitHub SSH references.
+- GitHub browser URL normalization: well-known paths after `owner/repo` and
+  HTTP(S) query parameters are stripped before clone or installation planning.
 
 ## Remaining after the first MVP
 

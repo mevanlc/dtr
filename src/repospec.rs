@@ -171,7 +171,10 @@ impl RepoSpec {
         };
 
         if let Some(forge) = forge {
-            if url.query().is_some() {
+            let strips_github_query = forge == Forge::GitHub
+                && matches!(url.scheme(), "http" | "https")
+                && url.query().is_some();
+            if url.query().is_some() && !strips_github_query {
                 return Err(DtrError::new(
                     "forge repository URLs must not contain a query string",
                 ));
@@ -190,7 +193,11 @@ impl RepoSpec {
                 _ => {}
             }
 
-            let mut segments = normalized_segments(url.path())?;
+            let (mut segments, stripped_github_browser_path) = if forge == Forge::GitHub {
+                github_url_segments(url.path(), matches!(url.scheme(), "http" | "https"))?
+            } else {
+                (normalized_segments(url.path())?, false)
+            };
             if forge == Forge::GitHub {
                 if segments.len() != 2 {
                     return Err(DtrError::new(
@@ -205,20 +212,30 @@ impl RepoSpec {
                 }
             }
 
-            let repo = strip_dot_git(&segments.pop().expect("at least two segments")).to_owned();
+            let repo_path_segment = segments.pop().expect("at least two segments");
+            let repo = strip_dot_git(&repo_path_segment).to_owned();
             if repo.is_empty() {
                 return Err(DtrError::new("repository name is empty"));
             }
+            let remote = if stripped_github_browser_path || strips_github_query {
+                let mut root = url.clone();
+                root.set_path(&format!("/{}/{}", segments[0], repo_path_segment));
+                root.set_query(None);
+                root.set_fragment(None);
+                OsString::from(root.as_str())
+            } else {
+                OsString::from(
+                    text.split_once('#')
+                        .map_or(text, |(base, _)| base)
+                        .trim_end_matches('/'),
+                )
+            };
             return Ok(Self::Forge {
                 forge,
                 host,
                 namespace: segments,
                 repo,
-                remote: Some(OsString::from(
-                    text.split_once('#')
-                        .map_or(text, |(base, _)| base)
-                        .trim_end_matches('/'),
-                )),
+                remote: Some(remote),
             });
         }
 
@@ -575,6 +592,73 @@ fn normalized_segments(path: &str) -> Result<Vec<String>, DtrError> {
     Ok(segments)
 }
 
+fn github_url_segments(
+    path: &str,
+    allow_browser_paths: bool,
+) -> Result<(Vec<String>, bool), DtrError> {
+    let trimmed = path.trim_matches('/');
+    if trimmed.is_empty() {
+        return Err(DtrError::new("repository URL path is empty"));
+    }
+
+    let segments = trimmed.split('/').collect::<Vec<_>>();
+    if allow_browser_paths && segments.len() > 2 && is_well_known_github_path(segments[2]) {
+        let repository_segments = &segments[..2];
+        if repository_segments.iter().any(|segment| {
+            segment.is_empty() || *segment == "." || *segment == ".." || segment.contains('%')
+        }) {
+            return Err(DtrError::new(
+                "repository URL contains an empty, relative, or percent-encoded path segment",
+            ));
+        }
+        return Ok((
+            repository_segments
+                .iter()
+                .map(|segment| (*segment).to_owned())
+                .collect(),
+            true,
+        ));
+    }
+
+    Ok((normalized_segments(path)?, false))
+}
+
+fn is_well_known_github_path(segment: &str) -> bool {
+    matches!(
+        segment,
+        "actions"
+            | "agents"
+            | "blob"
+            | "branches"
+            | "commit"
+            | "commits"
+            | "community"
+            | "compare"
+            | "deployments"
+            | "discussions"
+            | "edit"
+            | "fork"
+            | "forks"
+            | "graphs"
+            | "installations"
+            | "issues"
+            | "milestone"
+            | "milestones"
+            | "network"
+            | "new"
+            | "pkgs"
+            | "pull"
+            | "pulls"
+            | "pulse"
+            | "releases"
+            | "runs"
+            | "settings"
+            | "tags"
+            | "tree"
+            | "wiki"
+    )
+}
+
 fn generic_git_path(path: &str) -> Result<String, DtrError> {
     let trimmed = path.trim_matches('/');
     if trimmed.is_empty() {
@@ -775,6 +859,206 @@ mod tests {
     }
 
     #[test]
+    fn strips_well_known_github_browser_paths() {
+        for (value, expected) in [
+            (
+                "https://github.com/Blosc/miniexpr/actions",
+                "https://github.com/Blosc/miniexpr",
+            ),
+            (
+                "https://github.com/lightspeedwp/.github/agents",
+                "https://github.com/lightspeedwp/.github",
+            ),
+            (
+                "https://github.com/Akbar30Bill/DOOM_wads/blob/master/doom1.7z",
+                "https://github.com/Akbar30Bill/DOOM_wads",
+            ),
+            (
+                "https://github.com/AutoHotkey/AutoHotkey/branches",
+                "https://github.com/AutoHotkey/AutoHotkey",
+            ),
+            (
+                "https://github.com/Alexir/CMUdict/commit/dee8153c805261d8119e23241bb4e6f8b14ba953",
+                "https://github.com/Alexir/CMUdict",
+            ),
+            (
+                "https://github.com/apcamargo/typst-skills/commits",
+                "https://github.com/apcamargo/typst-skills",
+            ),
+            (
+                "https://github.com/Alexir/CMUdict/commits/master/",
+                "https://github.com/Alexir/CMUdict",
+            ),
+            (
+                "https://github.com/mevanlc/asgf/community",
+                "https://github.com/mevanlc/asgf",
+            ),
+            (
+                "https://github.com/MarkusBernhardt/proxy-vole/compare/master...akuhtz:proxy-vole:master",
+                "https://github.com/MarkusBernhardt/proxy-vole",
+            ),
+            (
+                "https://github.com/mpiorowski/late-sh/deployments",
+                "https://github.com/mpiorowski/late-sh",
+            ),
+            (
+                "https://github.com/jesseduffield/lazygit/discussions",
+                "https://github.com/jesseduffield/lazygit",
+            ),
+            (
+                "https://github.com/Vineflower/vineflower/discussions/209",
+                "https://github.com/Vineflower/vineflower",
+            ),
+            (
+                "https://github.com/mevanlc/aics/edit/main/README.md",
+                "https://github.com/mevanlc/aics",
+            ),
+            (
+                "https://github.com/Genivia/ugrep/fork",
+                "https://github.com/Genivia/ugrep",
+            ),
+            (
+                "https://github.com/TeamAmaze/AmazeFileManager/forks",
+                "https://github.com/TeamAmaze/AmazeFileManager",
+            ),
+            (
+                "https://github.com/hexchat/hexchat/graphs/contributors",
+                "https://github.com/hexchat/hexchat",
+            ),
+            (
+                "https://github.com/apps/gitguardian/installations",
+                "https://github.com/apps/gitguardian",
+            ),
+            (
+                "https://github.com/mpiorowski/late-sh/issues",
+                "https://github.com/mpiorowski/late-sh",
+            ),
+            (
+                "https://github.com/BerriAI/litellm/issues/13564",
+                "https://github.com/BerriAI/litellm",
+            ),
+            (
+                "https://github.com/audacity/audacity/milestone/18",
+                "https://github.com/audacity/audacity",
+            ),
+            (
+                "https://github.com/audacity/audacity/milestones",
+                "https://github.com/audacity/audacity",
+            ),
+            (
+                "https://github.com/Dicklesworthstone/mcp_agent_mail_rust/network/dependencies",
+                "https://github.com/Dicklesworthstone/mcp_agent_mail_rust",
+            ),
+            (
+                "https://github.com/mevanlc/asgf/new/main",
+                "https://github.com/mevanlc/asgf",
+            ),
+            (
+                "https://github.com/WebAssembly/WASI/pkgs/container/wasi%2Fcli",
+                "https://github.com/WebAssembly/WASI",
+            ),
+            (
+                "https://github.com/RamonUnch/AltSnap/pull/708",
+                "https://github.com/RamonUnch/AltSnap",
+            ),
+            (
+                "https://github.com/aatxe/irc/pulls",
+                "https://github.com/aatxe/irc",
+            ),
+            (
+                "https://github.com/Dicklesworthstone/mcp_agent_mail_rust/pulse",
+                "https://github.com/Dicklesworthstone/mcp_agent_mail_rust",
+            ),
+            (
+                "https://github.com/mpiorowski/late-sh/pulse#",
+                "https://github.com/mpiorowski/late-sh",
+            ),
+            (
+                "https://github.com/AlDanial/cloc/releases",
+                "https://github.com/AlDanial/cloc",
+            ),
+            (
+                "https://github.com/openai/codex/releases#release-rusty-v8-v150.4.0",
+                "https://github.com/openai/codex",
+            ),
+            (
+                "https://github.com/mpiorowski/late-sh/runs/89740778333",
+                "https://github.com/mpiorowski/late-sh",
+            ),
+            (
+                "https://github.com/mevanlc/about-crc/settings",
+                "https://github.com/mevanlc/about-crc",
+            ),
+            (
+                "https://github.com/DioNanos/codex-termux/tags",
+                "https://github.com/DioNanos/codex-termux",
+            ),
+            (
+                "https://github.com/Alexir/CMUdict/tree/master",
+                "https://github.com/Alexir/CMUdict",
+            ),
+            (
+                "https://github.com/Slackadays/Clipboard/wiki/GUI-Clipboard-Compat",
+                "https://github.com/Slackadays/Clipboard",
+            ),
+            (
+                "https://github.com/scriptgenieai/scriptgenie/wiki#common-issues",
+                "https://github.com/scriptgenieai/scriptgenie",
+            ),
+            (
+                "https://github.com/asmvik/yabai/wiki#installation-requirements",
+                "https://github.com/asmvik/yabai",
+            ),
+            (
+                "https://github.com/asmvik/yabai/wiki#quickstart-guide",
+                "https://github.com/asmvik/yabai",
+            ),
+            (
+                "https://github.com/rakshasa/rtorrent/wiki#users-manual",
+                "https://github.com/rakshasa/rtorrent",
+            ),
+        ] {
+            let spec = parse(value);
+            assert_eq!(
+                spec.forge_slug().as_deref(),
+                expected.strip_prefix("https://github.com/"),
+                "{value}"
+            );
+            assert_eq!(
+                spec.git_remote().unwrap(),
+                OsString::from(expected),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn strips_queries_from_github_http_urls() {
+        for (value, expected) in [
+            (
+                "https://github.com/owner/tool?tab=readme-ov-file",
+                "https://github.com/owner/tool",
+            ),
+            (
+                "https://github.com/owner/tool.git?tab=readme-ov-file#readme",
+                "https://github.com/owner/tool.git",
+            ),
+            (
+                "https://github.com/owner/tool/issues?q=is%3Aissue+is%3Aopen",
+                "https://github.com/owner/tool",
+            ),
+        ] {
+            let spec = parse(value);
+            assert_eq!(spec.forge_slug().as_deref(), Some("owner/tool"), "{value}");
+            assert_eq!(
+                spec.git_remote().unwrap(),
+                OsString::from(expected),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
     fn strips_fragments_from_recognized_forge_references() {
         for (value, slug, remote) in [
             (
@@ -913,12 +1197,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_forge_browser_pages_and_queries() {
+    fn rejects_unknown_forge_browser_pages_and_queries() {
         for value in [
-            "https://github.com/o/r/tree/main",
-            "https://github.com/o/r?tab=readme",
-            "https://github.com/o/r/tree/main#readme",
+            "https://github.com/o/r/not-a-known-route/main",
+            "ssh://git@github.com/o/r/tree/main",
             "https://gitlab.com/o/r/-/blob/main/README.md",
+            "https://gitlab.com/o/r?tab=readme",
         ] {
             assert!(RepoSpec::parse(OsStr::new(value)).is_err(), "{value}");
         }

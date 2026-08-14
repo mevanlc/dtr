@@ -96,9 +96,17 @@ reserves both, so they can never name a repository. Classification does not
 change based on what happens to exist in the current directory.
 
 An optional `#fragment` is stripped from a recognized GitHub or GitLab
-repository-root reference before cloning or installation. Browser subpages and
-query strings remain errors rather than being guessed at. Fragments on generic
-Git remotes are preserved.
+repository-root reference before cloning or installation. HTTP(S) GitHub URLs
+also discard these well-known browser paths and everything after them:
+`actions`, `agents`, `blob`, `branches`, `commit`, `commits`, `community`,
+`compare`, `deployments`, `discussions`, `edit`, `fork`, `forks`, `graphs`,
+`installations`, `issues`, `milestone`, `milestones`, `network`, `new`, `pkgs`,
+`pull`, `pulls`, `pulse`, `releases`, `runs`, `settings`, `tags`, `tree`, and
+`wiki`. GitHub HTTP(S) query parameters are discarded too. For example,
+`https://github.com/owner/repo/issues/123?notification_referrer_id=1` is treated
+as `https://github.com/owner/repo`. Unknown GitHub browser subpages, GitLab query
+strings, and GitLab browser pages remain errors rather than being guessed at.
+Fragments and query parameters on generic Git remotes are preserved.
 
 ### Clone directory modes
 
@@ -538,8 +546,10 @@ the resolved clone/install operation or creates its planned target directories.
 ## Current boundaries
 
 - Well-known forge handling covers `github.com` and `gitlab.com`.
-- Forge browser-page URLs such as `/tree/` and `/-/blob/` are rejected rather
-  than guessed at; fragments on repository-root references are stripped.
+- Well-known HTTP(S) GitHub browser paths are stripped to the repository root;
+  unknown GitHub browser paths and GitLab browser pages such as `/-/blob/` are
+  rejected rather than guessed at. Fragments on repository-root references are
+  stripped, as are query parameters on GitHub HTTP(S) URLs.
 - Literal `scp://` and `sftp://` staging is parked for a later milestone.
 - Go module paths that differ from their repository paths, automatic package or
   workspace selection in monorepos, GitLab/Enterprise account selection, and

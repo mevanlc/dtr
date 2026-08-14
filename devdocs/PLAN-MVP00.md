@@ -125,7 +125,11 @@ Only exact repository-root forge URLs are accepted as forge references. Browser
 page URLs containing `/tree/` or `/blob/`, and query strings, produce a focused
 error instead of silently cloning or installing a different repository than the
 user intended. ※ MVP00 also rejected fragments; current behavior strips an
-optional fragment from a recognized repository-root forge reference.
+optional fragment from a recognized repository-root forge reference. ※ Current
+behavior also reduces HTTP(S) GitHub URLs containing a recognized browser route
+after `owner/repo` to that repository root; unknown routes, GitLab browser pages,
+and GitLab query strings remain errors. GitHub HTTP(S) query parameters are
+discarded.
 
 ### Clone options
 
@@ -382,7 +386,9 @@ Use table-driven tests for:
 - Every repospec example and every parser-precedence boundary.
 - `.git` and trailing-slash normalization.
 - ※ Rejection of forge browser-page URLs and queries; current behavior strips
-  fragments from recognized repository-root forge references.
+  fragments from recognized repository-root forge references and well-known
+  HTTP(S) GitHub browser routes from otherwise valid repository URLs, and
+  discards GitHub HTTP(S) query parameters.
 - GitHub and nested GitLab target derivation under default, `-O`, and `-D`.
 - Go import-path derivation, default `@latest`, and `--no-latest`.
 - Shell-safe explain rendering.
