@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Parser)]
@@ -49,6 +50,15 @@ pub(crate) enum DtrCommand {
         long_about = "Read or change dtr configuration.\n\nAvailable configuration keys:\n  github.auth.auto_switch\n      Comma-separated GitHub CLI account names eligible for process-scoped\n      authentication when an explicit repository owner matches.\n  narration\n      Whether dtr prints command, clone-path, and install-success narration.\n  uv.install.force\n      Whether uv installs receive --force.\n  uv.install.editable\n      Whether uv installs receive --editable.\n  uv.install.reinstall\n      Whether uv installs receive --reinstall."
     )]
     Config(ConfigArgs),
+
+    /// Generate shell completion scripts
+    Completion(CompletionArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct CompletionArgs {
+    /// Shell to generate completions for
+    pub(crate) shell: Shell,
 }
 
 #[derive(Debug, Args)]

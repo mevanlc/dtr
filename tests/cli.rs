@@ -615,6 +615,35 @@ fn config_long_help_documents_available_keys() {
 }
 
 #[test]
+fn completion_generates_scripts_for_supported_shells() {
+    let harness = Harness::new(&[]);
+
+    for shell in ["bash", "elvish", "fish", "powershell", "zsh"] {
+        let output = harness.run(&["completion", shell]);
+        assert!(output.status.success(), "{shell}: {}", stderr(&output));
+        assert!(stdout(&output).contains("dtr"), "{shell}");
+        assert_eq!(stderr(&output), "", "{shell}");
+    }
+}
+
+#[test]
+fn completion_rejects_unknown_shells_and_explain() {
+    let harness = Harness::new(&[]);
+
+    let unknown = harness.run(&["completion", "nu"]);
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(stderr(&unknown).contains("invalid value 'nu'"));
+
+    let explain = harness.run(&["--explain", "completion", "zsh"]);
+    assert_eq!(explain.status.code(), Some(2));
+    assert!(
+        stderr(&explain).contains("--explain does not apply to dtr completion"),
+        "{}",
+        stderr(&explain)
+    );
+}
+
+#[test]
 fn config_list_prints_configured_values_or_names() {
     let harness = Harness::new(&[]);
     let empty = harness.run(&["config", "list"]);

@@ -71,6 +71,20 @@ GitLab repository falls back to `git clone`. A bare repository name requires
 authenticated `gh` state because its owner is otherwise unknowable.
 Remote auto detection also uses Git for its filtered inspection fallback.
 
+## Shell completion
+
+```text
+dtr completion <bash|elvish|fish|powershell|zsh>
+```
+
+`dtr completion` writes a completion script to standard output. Redirect it to
+the location loaded by your shell, for example:
+
+```sh
+dtr completion zsh > ~/.zfunc/_dtr
+dtr completion fish > ~/.config/fish/completions/dtr.fish
+```
+
 ## Clone
 
 ```text

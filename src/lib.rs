@@ -9,7 +9,10 @@ mod kit;
 mod repospec;
 mod resolve;
 
-use clap::Parser;
+use std::io::{self, Write};
+
+use clap::{CommandFactory, Parser};
+use clap_complete::generate;
 
 use crate::cli::{Cli, DtrCommand};
 use crate::clone_args::{ParsedClone, parse_clone_args};
@@ -43,6 +46,23 @@ fn run() -> Result<i32, DtrError> {
     };
 
     let plan = match command {
+        DtrCommand::Completion(args) => {
+            if explain {
+                return Err(DtrError::new("--explain does not apply to dtr completion"));
+            }
+            let mut command = Cli::command();
+            let binary_name = command.get_name().to_owned();
+            let mut script = Vec::new();
+            generate(args.shell, &mut command, binary_name, &mut script);
+            if let Err(error) = io::stdout().write_all(&script)
+                && error.kind() != io::ErrorKind::BrokenPipe
+            {
+                return Err(DtrError::new(format!(
+                    "failed to write completion script: {error}"
+                )));
+            }
+            return Ok(0);
+        }
         DtrCommand::Clone(args) => match parse_clone_args(args.argv)? {
             ParsedClone::Help => {
                 print!("{}", clone_args::HELP);
