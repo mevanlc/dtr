@@ -78,10 +78,7 @@ fn run() -> Result<i32, DtrError> {
             return kit::run(args, explain, narration_override);
         }
         DtrCommand::Config(args) => {
-            if explain {
-                return Err(DtrError::new("--explain does not apply to dtr config"));
-            }
-            return config::run(args);
+            return config::run(args, explain, narration_override);
         }
     };
 

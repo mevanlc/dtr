@@ -224,6 +224,9 @@ pub(crate) enum ConfigCommand {
 
     /// Remove a configuration value
     Unset(ConfigKeyArgs),
+
+    /// Edit the configuration
+    Edit,
 }
 
 #[derive(Debug, Args)]
@@ -566,6 +569,16 @@ mod tests {
         ])
         .expect("valid command");
         assert!(matches!(cli.command, DtrCommand::Config(_)));
+    }
+
+    #[test]
+    fn config_edit_subcommand_is_accepted() {
+        let cli =
+            Cli::try_parse_from(["dtr", "config", "edit"]).expect("valid config edit command");
+        let DtrCommand::Config(args) = cli.command else {
+            panic!("expected config command");
+        };
+        assert!(matches!(args.command, ConfigCommand::Edit));
     }
 
     #[test]

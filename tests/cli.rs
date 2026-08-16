@@ -141,6 +141,11 @@ impl Harness {
         self.config.join("install-all.toml")
     }
 
+    fn write_config(&self, text: &str) {
+        fs::create_dir_all(&self.config).unwrap();
+        fs::write(self.config_file(), text).unwrap();
+    }
+
     fn write_kit(&self, text: &str) {
         fs::create_dir_all(&self.config).unwrap();
         fs::write(self.kit_file(), text).unwrap();
@@ -587,6 +592,118 @@ fn config_rejects_unknown_keys_and_invalid_account_lists() {
         assert_eq!(output.status.code(), Some(2), "{value:?}");
     }
     assert!(!harness.config_file().exists());
+}
+
+#[test]
+fn config_edit_launches_even_if_current_config_is_invalid() {
+    let harness = Harness::new(&["custom-editor"]);
+    harness.write_config("invalid toml = [");
+
+    let output = harness
+        .command(&["config", "edit"])
+        .env("DTR_EDITOR", "custom-editor")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("custom-editor").args,
+        [harness.config_file().to_str().unwrap()]
+    );
+
+    let harness_invalid_auth = Harness::new(&["custom-editor"]);
+    harness_invalid_auth.write_config("[github.auth]\nauto_switch = []\n");
+
+    let output = harness_invalid_auth
+        .command(&["config", "edit"])
+        .env("DTR_EDITOR", "custom-editor")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness_invalid_auth.invocation("custom-editor").args,
+        [harness_invalid_auth.config_file().to_str().unwrap()]
+    );
+}
+
+#[test]
+fn config_edit_honors_editor_precedence_and_arguments() {
+    let harness = Harness::new(&["dtr-editor", "visual-editor", "plain-editor"]);
+    let output = harness
+        .command(&["config", "edit"])
+        .env("DTR_EDITOR", "dtr-editor --wait")
+        .env("VISUAL", "visual-editor")
+        .env("EDITOR", "plain-editor")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("dtr-editor").args,
+        ["--wait", harness.config_file().to_str().unwrap()]
+    );
+    assert!(!harness.was_invoked("visual-editor"));
+    assert!(!harness.was_invoked("plain-editor"));
+    assert!(harness.config_file().parent().unwrap().is_dir());
+}
+
+#[test]
+fn config_edit_explain_is_read_only_and_does_not_require_valid_config() {
+    let explain = Harness::new(&["vim", "vi"]);
+    explain.write_config("not valid toml = [");
+    let output = explain.run(&["--explain", "config", "edit"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        format!("command:  vim {}\n", explain.config_file().display())
+    );
+    assert!(!explain.was_invoked("vim"));
+    assert!(!explain.was_invoked("vi"));
+
+    let execute = Harness::new(&["vim", "vi"]);
+    let output = execute.run(&["config", "edit"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(execute.was_invoked("vim"));
+    assert!(!execute.was_invoked("vi"));
+}
+
+#[test]
+fn config_edit_prefers_visual_over_editor() {
+    let harness = Harness::new(&["visual-editor", "plain-editor"]);
+    let output = harness
+        .command(&["config", "edit"])
+        .env("VISUAL", "visual-editor --foreground")
+        .env("EDITOR", "plain-editor")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        harness.invocation("visual-editor").args,
+        ["--foreground", harness.config_file().to_str().unwrap()]
+    );
+    assert!(!harness.was_invoked("plain-editor"));
+}
+
+#[test]
+fn config_edit_honors_narration_preference_and_cli_overrides() {
+    let harness = Harness::new(&["vim"]);
+    let output = harness
+        .command(&["--no-narration", "config", "edit"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!stderr(&output).contains('→'));
+
+    let output = harness
+        .command(&["--narration", "config", "edit"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("→ vim"));
+
+    let harness_invalid = Harness::new(&["vim"]);
+    harness_invalid.write_config("invalid toml = [");
+    let output = harness_invalid.run(&["config", "edit"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("→ vim"));
 }
 
 #[test]

@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{self, Command};
+use std::process;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -13,7 +13,7 @@ use toml_edit::{Array, DocumentMut, Item, Table, Value, value};
 
 use crate::cli::{InstallArgs, InstallTool, Jobs, KitArgs, KitCommand};
 use crate::command::{
-    CommandPlan, DtrMessage, InterruptState, ToolOutput, command_exists, display_path,
+    CommandPlan, DtrMessage, InterruptState, ToolOutput, config_parent, display_path, edit_file,
     friendly_path, shell_quote_argument,
 };
 use crate::config::{self, Config};
@@ -146,11 +146,14 @@ pub(crate) fn run(
     let args = match args.command {
         KitCommand::List(args) => return list(&selected_file_path(args.file, !explain)?),
         KitCommand::Edit(args) => {
-            return edit(
-                &selected_file_path(args.file, !explain)?,
-                explain,
-                narration_override,
-            );
+            let path = selected_file_path(args.file, !explain)?;
+            let narration = match narration_override {
+                Some(narration) => narration,
+                None => Config::load_for_runtime()
+                    .map(|config| config.narration())
+                    .unwrap_or(true),
+            };
+            return edit_file(&path, explain, narration);
         }
         KitCommand::Install(args) => args,
     };
@@ -584,78 +587,6 @@ fn render_install_command(entry: &InstallEntry, home: Option<&Path>) -> Result<S
         .join(" "))
 }
 
-fn edit(path: &Path, explain: bool, narration_override: Option<bool>) -> Result<i32, DtrError> {
-    let (program, mut arguments) = editor_command()?;
-    arguments.push(path.as_os_str().to_os_string());
-    let rendered = std::iter::once(program.as_os_str())
-        .chain(arguments.iter().map(OsString::as_os_str))
-        .map(shell_quote_argument)
-        .collect::<Vec<_>>()
-        .join(" ");
-    if explain {
-        println!("command:  {rendered}");
-        return Ok(0);
-    }
-
-    let parent = config_parent(path);
-    fs::create_dir_all(parent).map_err(|error| {
-        DtrError::new(format!(
-            "could not create configuration directory {}: {error}",
-            parent.display()
-        ))
-    })?;
-    let narration = match narration_override {
-        Some(narration) => narration,
-        None => Config::load_for_runtime()?.narration(),
-    };
-    if narration {
-        eprintln!("→ {rendered}");
-    }
-    let status = Command::new(&program)
-        .args(&arguments)
-        .status()
-        .map_err(|error| {
-            DtrError::new(format!(
-                "could not start editor {}: {error}",
-                program.to_string_lossy()
-            ))
-        })?;
-    Ok(status.code().unwrap_or(1))
-}
-
-fn editor_command() -> Result<(OsString, Vec<OsString>), DtrError> {
-    for variable in ["DTR_EDITOR", "VISUAL", "EDITOR"] {
-        let Some(value) = env::var_os(variable) else {
-            continue;
-        };
-        if value.is_empty() {
-            continue;
-        }
-        let text = value.to_str().ok_or_else(|| {
-            DtrError::new(format!(
-                "{variable} must be valid UTF-8 to parse editor arguments"
-            ))
-        })?;
-        let words = shlex::split(text).ok_or_else(|| {
-            DtrError::new(format!("could not parse {variable} as an editor command"))
-        })?;
-        if words.is_empty() {
-            continue;
-        }
-        let mut words = words.into_iter().map(OsString::from);
-        let program = words.next().expect("nonempty editor command");
-        return Ok((program, words.collect()));
-    }
-    for fallback in ["vim", "vi"] {
-        if command_exists(fallback) {
-            return Ok((fallback.into(), Vec::new()));
-        }
-    }
-    Err(DtrError::new(
-        "could not find an editor; set DTR_EDITOR, VISUAL, or EDITOR, or install vim or vi",
-    ))
-}
-
 fn backend_tool(backend: &str) -> Result<InstallTool, DtrError> {
     match backend {
         "go" => Ok(InstallTool::Go),
@@ -805,12 +736,6 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), DtrError> {
         ))
     })?;
     Ok(())
-}
-
-fn config_parent(path: &Path) -> &Path {
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."))
 }
 
 fn expand_home(repospec: String, home: Option<&Path>) -> Result<OsString, DtrError> {

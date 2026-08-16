@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{ConfigArgs, ConfigCommand};
+use crate::command::edit_file;
 use crate::error::DtrError;
 
 pub(crate) const GITHUB_AUTO_SWITCH_KEY: &str = "github.auth.auto_switch";
@@ -326,9 +327,26 @@ impl Config {
     }
 }
 
-pub(crate) fn run(args: ConfigArgs) -> Result<i32, DtrError> {
+pub(crate) fn run(
+    args: ConfigArgs,
+    explain: bool,
+    narration_override: Option<bool>,
+) -> Result<i32, DtrError> {
     match args.command {
+        ConfigCommand::Edit => {
+            let path = config_file_path()?;
+            let narration = match narration_override {
+                Some(narration) => narration,
+                None => Config::load_for_runtime()
+                    .map(|config| config.narration())
+                    .unwrap_or(true),
+            };
+            edit_file(&path, explain, narration)
+        }
         ConfigCommand::List(args) => {
+            if explain {
+                return Err(DtrError::new("--explain does not apply to dtr config"));
+            }
             let config = Config::load()?;
             for key in CONFIG_KEYS {
                 let Some(value) = config.value(key) else {
@@ -340,8 +358,12 @@ pub(crate) fn run(args: ConfigArgs) -> Result<i32, DtrError> {
                     println!("{key}={value}");
                 }
             }
+            Ok(0)
         }
         ConfigCommand::Set(args) => {
+            if explain {
+                return Err(DtrError::new("--explain does not apply to dtr config"));
+            }
             require_known_key(&args.key)?;
             let path = config_file_path()?;
             let mut config = Config::load_at(&path)?;
@@ -355,15 +377,23 @@ pub(crate) fn run(args: ConfigArgs) -> Result<i32, DtrError> {
                 }
             }
             config.save_at(&path)?;
+            Ok(0)
         }
         ConfigCommand::Get(args) => {
+            if explain {
+                return Err(DtrError::new("--explain does not apply to dtr config"));
+            }
             require_known_key(&args.key)?;
             let value = Config::load()?.value(&args.key).ok_or_else(|| {
                 DtrError::new(format!("configuration key {} is not set", args.key))
             })?;
             println!("{value}");
+            Ok(0)
         }
         ConfigCommand::Unset(args) => {
+            if explain {
+                return Err(DtrError::new("--explain does not apply to dtr config"));
+            }
             require_known_key(&args.key)?;
             let path = config_file_path()?;
             if path.exists() {
@@ -375,9 +405,9 @@ pub(crate) fn run(args: ConfigArgs) -> Result<i32, DtrError> {
                 }
                 config.save_at(&path)?;
             }
+            Ok(0)
         }
     }
-    Ok(0)
 }
 
 fn parse_bool(key: &str, value: &str) -> Result<bool, DtrError> {

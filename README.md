@@ -199,6 +199,11 @@ dtr config get github.auth.auto_switch
 dtr config unset github.auth.auto_switch
 ```
 
+`dtr config edit` opens the configuration file directly in the first configured
+or available editor (`DTR_EDITOR`, `VISUAL`, `EDITOR`, `vim`, then `vi`), even
+if the current configuration file is invalid. In explain mode, it prints the
+editor command without creating directories or starting it.
+
 Configuration is stored at `<user-home>/.config/dtr/config.toml`.
 `DTR_CONFIG_DIR` overrides the containing directory. The file may contain the
 account allowlist, the narration preference, and the [uv install

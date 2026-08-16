@@ -686,6 +686,80 @@ fn quote_bytes(bytes: &[u8]) -> String {
     quoted
 }
 
+pub(crate) fn edit_file(path: &Path, explain: bool, narration: bool) -> Result<i32, DtrError> {
+    let (program, mut arguments) = editor_command()?;
+    arguments.push(path.as_os_str().to_os_string());
+    let rendered = std::iter::once(program.as_os_str())
+        .chain(arguments.iter().map(OsString::as_os_str))
+        .map(shell_quote_argument)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if explain {
+        println!("command:  {rendered}");
+        return Ok(0);
+    }
+
+    let parent = config_parent(path);
+    fs::create_dir_all(parent).map_err(|error| {
+        DtrError::new(format!(
+            "could not create configuration directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+    if narration {
+        eprintln!("→ {rendered}");
+    }
+    let status = Command::new(&program)
+        .args(&arguments)
+        .status()
+        .map_err(|error| {
+            DtrError::new(format!(
+                "could not start editor {}: {error}",
+                program.to_string_lossy()
+            ))
+        })?;
+    Ok(status.code().unwrap_or(1))
+}
+
+pub(crate) fn config_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+pub(crate) fn editor_command() -> Result<(OsString, Vec<OsString>), DtrError> {
+    for variable in ["DTR_EDITOR", "VISUAL", "EDITOR"] {
+        let Some(value) = env::var_os(variable) else {
+            continue;
+        };
+        if value.is_empty() {
+            continue;
+        }
+        let text = value.to_str().ok_or_else(|| {
+            DtrError::new(format!(
+                "{variable} must be valid UTF-8 to parse editor arguments"
+            ))
+        })?;
+        let words = shlex::split(text).ok_or_else(|| {
+            DtrError::new(format!("could not parse {variable} as an editor command"))
+        })?;
+        if words.is_empty() {
+            continue;
+        }
+        let mut words = words.into_iter().map(OsString::from);
+        let program = words.next().expect("nonempty editor command");
+        return Ok((program, words.collect()));
+    }
+    for fallback in ["vim", "vi"] {
+        if command_exists(fallback) {
+            return Ok((fallback.into(), Vec::new()));
+        }
+    }
+    Err(DtrError::new(
+        "could not find an editor; set DTR_EDITOR, VISUAL, or EDITOR, or install vim or vi",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
