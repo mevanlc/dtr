@@ -200,7 +200,7 @@ remain byte-safe where the underlying platform permits non-UTF-8 paths.
 16. [x] ※ Track successful installs in the original install-all configuration with `--add`.
 17. [x] Rename that collection to the `kit` command namespace and `kit.toml`.
 18. [x] Add visible `k`, `k i`, and `k ls` aliases for the kit command hierarchy.
-19. [x] Add `kit add|a`, with optional `-i|--install`, for direct kit tracking.
+19. [x] Add `kit add|a`, installing by default with an opt-out `--no-install`.
 
 ## Validation record
 

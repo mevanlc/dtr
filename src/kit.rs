@@ -145,7 +145,7 @@ pub(crate) fn run(
 ) -> Result<i32, DtrError> {
     let args = match args.command {
         KitCommand::Add(args) => {
-            let install = args.install;
+            let install = args.install();
             return run_add(
                 args.into_install_args(),
                 install,

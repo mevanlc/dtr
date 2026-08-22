@@ -824,27 +824,42 @@ fn kit_aliases_are_visible_and_execute() {
 }
 
 #[test]
-fn kit_add_tracks_without_installing_and_can_install_before_tracking() {
+fn kit_add_installs_by_default_and_can_track_without_installing() {
     let harness = Harness::new(&["cargo"]);
     let tracked_repo = harness.local_repository("tracked-only", &["Cargo.toml"], &[]);
     let installed_repo = harness.local_repository("installed", &["Cargo.toml"], &[]);
 
-    let explain = harness.run(&["--explain", "kit", "add", &tracked_repo]);
+    let explain = harness.run(&["--explain", "kit", "add", "--no-install", &tracked_repo]);
     assert!(explain.status.success(), "{}", stderr(&explain));
     assert!(stdout(&explain).contains("track:    "));
     assert!(!harness.kit_file().exists());
     assert!(!harness.was_invoked("cargo"));
 
-    let added = harness.run(&["kit", "add", "--tool", "cargo", &tracked_repo]);
+    let added = harness.run(&[
+        "kit",
+        "add",
+        "--no-install",
+        "--tool",
+        "cargo",
+        &tracked_repo,
+    ]);
     assert!(added.status.success(), "{}", stderr(&added));
     assert!(stderr(&added).contains("tracked:"), "{}", stderr(&added));
     assert!(!harness.was_invoked("cargo"));
 
-    let installed = harness.run(&["k", "a", "-i", &installed_repo]);
+    let installed = harness.run(&["k", "a", &installed_repo]);
     assert!(installed.status.success(), "{}", stderr(&installed));
     assert_eq!(
         harness.invocation("cargo").args,
         ["install", "--path", "./installed"]
+    );
+
+    let conflict = harness.run(&["kit", "add", "--install", "--no-install", &installed_repo]);
+    assert!(!conflict.status.success(), "{}", stdout(&conflict));
+    assert!(
+        stderr(&conflict).contains("--no-install"),
+        "{}",
+        stderr(&conflict)
     );
 
     let config = fs::read_to_string(harness.kit_file()).unwrap();
@@ -1315,6 +1330,7 @@ fn kit_help_and_jobs_validation_are_explicit() {
     assert!(add_help.status.success(), "{}", stderr(&add_help));
     let help_text = stdout(&add_help);
     assert!(help_text.contains("-i, --install"), "{help_text}");
+    assert!(help_text.contains("--no-install"), "{help_text}");
 
     let install_help = harness.run(&["kit", "install", "--help"]);
     assert!(install_help.status.success(), "{}", stderr(&install_help));

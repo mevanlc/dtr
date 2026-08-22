@@ -118,9 +118,13 @@ pub(crate) enum KitCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct KitAddArgs {
-    /// Install the repository before adding it to the kit
-    #[arg(short = 'i', long)]
+    /// Install the repository before adding it to the kit (default)
+    #[arg(short = 'i', long, conflicts_with = "no_install")]
     pub(crate) install: bool,
+
+    /// Add the repository to the kit without installing it
+    #[arg(long, conflicts_with = "install")]
+    pub(crate) no_install: bool,
 
     /// Installer to use; rust is an alias for cargo
     #[arg(short = 't', long, default_value_t = InstallTool::Auto)]
@@ -140,6 +144,10 @@ pub(crate) struct KitAddArgs {
 }
 
 impl KitAddArgs {
+    pub(crate) fn install(&self) -> bool {
+        !self.no_install
+    }
+
     pub(crate) fn into_install_args(self) -> InstallArgs {
         InstallArgs {
             add: true,
@@ -388,10 +396,21 @@ mod tests {
         }
     }
 
+    fn parse_kit_add(argv: &[&str]) -> KitAddArgs {
+        let cli = Cli::try_parse_from(argv).expect("valid kit add command");
+        let DtrCommand::Kit(args) = cli.command else {
+            panic!("expected kit command");
+        };
+        let KitCommand::Add(args) = args.command else {
+            panic!("expected kit add command");
+        };
+        args
+    }
+
     #[test]
-    fn kit_add_accepts_optional_install_and_install_arguments() {
+    fn kit_add_installs_by_default_and_accepts_install_arguments() {
         for install_flag in ["-i", "--install"] {
-            let cli = Cli::try_parse_from([
+            let args = parse_kit_add(&[
                 "dtr",
                 "kit",
                 "add",
@@ -401,29 +420,22 @@ mod tests {
                 "owner/repo",
                 "--",
                 "--locked",
-            ])
-            .expect("valid kit add command");
-            let DtrCommand::Kit(args) = cli.command else {
-                panic!("expected kit command");
-            };
-            let KitCommand::Add(args) = args.command else {
-                panic!("expected kit add command");
-            };
-            assert!(args.install);
+            ]);
+            assert!(args.install());
             assert_eq!(args.tool, InstallTool::Cargo);
             assert_eq!(args.repospec, "owner/repo");
             assert_eq!(args.install_args, ["--locked"].map(OsString::from));
         }
 
-        let cli = Cli::try_parse_from(["dtr", "kit", "add"]).expect("valid kit add command");
-        let DtrCommand::Kit(args) = cli.command else {
-            panic!("expected kit command");
-        };
-        let KitCommand::Add(args) = args.command else {
-            panic!("expected kit add command");
-        };
-        assert!(!args.install);
+        let args = parse_kit_add(&["dtr", "kit", "add"]);
+        assert!(args.install());
         assert_eq!(args.repospec, ".");
+
+        let args = parse_kit_add(&["dtr", "kit", "add", "--no-install"]);
+        assert!(!args.install());
+
+        Cli::try_parse_from(["dtr", "kit", "add", "--install", "--no-install"])
+            .expect_err("--install and --no-install conflict");
     }
 
     #[test]

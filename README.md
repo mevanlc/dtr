@@ -418,7 +418,7 @@ updated without installing or writing it.
 ## Manage an installation kit
 
 ```text
-dtr [--explain|-n] [--narration|--no-narration] kit|k add|a [-i|--install] [-t|--tool <tool>] [--no-latest] [<dtr-repospec>] [-- <install-arg>...]
+dtr [--explain|-n] [--narration|--no-narration] kit|k add|a [--no-install] [-t|--tool <tool>] [--no-latest] [<dtr-repospec>] [-- <install-arg>...]
 dtr [--explain|-n] [--narration|--no-narration] kit|k install|i [-j|--jobs <n|auto>] [-q|--quiet] [--file <FILE>]
 dtr kit|k list|ls [--file <FILE>]
 dtr [--explain|-n] kit|k edit [--file <FILE>]
@@ -428,11 +428,13 @@ dtr [--explain|-n] kit|k edit [--file <FILE>]
 and `ls` aliases `list`, while `a` aliases `add`. The aliases can be combined as
 `dtr k a`, `dtr k i`, and `dtr k ls`.
 
-`kit add` tracks one repository without invoking its installer. Its repository,
-tool, Go-version, and native-argument options match `dtr install`; the repository
-defaults to the current directory. Add `-i` or `--install` to install first, so
-`dtr kit add --install <spec>` is equivalent to `dtr install --add <spec>`.
-Explain mode reports the kit file without installing or changing it.
+`kit add` installs one repository and then tracks it, so `dtr kit add <spec>`
+is equivalent to `dtr install --add <spec>`. Its repository, tool, Go-version,
+and native-argument options match `dtr install`; the repository defaults to the
+current directory. Add `--no-install` to track the repository without invoking
+its installer; `-i`/`--install` states the default explicitly and conflicts with
+`--no-install`. Explain mode reports the kit file without installing or changing
+it.
 
 `kit install` reads `<user-home>/.config/dtr/kit.toml` and plans each
 `[[install]]` entry in file order. `DTR_CONFIG_DIR` overrides the containing
