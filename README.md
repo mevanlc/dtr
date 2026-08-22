@@ -418,13 +418,21 @@ updated without installing or writing it.
 ## Manage an installation kit
 
 ```text
+dtr [--explain|-n] [--narration|--no-narration] kit|k add|a [-i|--install] [-t|--tool <tool>] [--no-latest] [<dtr-repospec>] [-- <install-arg>...]
 dtr [--explain|-n] [--narration|--no-narration] kit|k install|i [-j|--jobs <n|auto>] [-q|--quiet] [--file <FILE>]
 dtr kit|k list|ls [--file <FILE>]
 dtr [--explain|-n] kit|k edit [--file <FILE>]
 ```
 
 `k` is a visible alias for `kit`; within that namespace, `i` aliases `install`
-and `ls` aliases `list`. The aliases can be combined as `dtr k i` and `dtr k ls`.
+and `ls` aliases `list`, while `a` aliases `add`. The aliases can be combined as
+`dtr k a`, `dtr k i`, and `dtr k ls`.
+
+`kit add` tracks one repository without invoking its installer. Its repository,
+tool, Go-version, and native-argument options match `dtr install`; the repository
+defaults to the current directory. Add `-i` or `--install` to install first, so
+`dtr kit add --install <spec>` is equivalent to `dtr install --add <spec>`.
+Explain mode reports the kit file without installing or changing it.
 
 `kit install` reads `<user-home>/.config/dtr/kit.toml` and plans each
 `[[install]]` entry in file order. `DTR_CONFIG_DIR` overrides the containing
@@ -435,7 +443,7 @@ renames a sibling `install-all.toml` to `kit.toml` when `kit.toml` does not yet
 exist. If both files exist, dtr uses `kit.toml` and leaves `install-all.toml`
 untouched. Explain mode and explicit `--file` paths do not perform this migration.
 
-`--file FILE` selects an alternate kit TOML file for any of the three actions.
+`--file FILE` selects an alternate kit TOML file for install, list, or edit.
 `kit list` prints each tracked entry as a shell-safe, reusable
 `dtr install ...` command without invoking an installer. `kit edit` launches
 the first configured or available editor in this order:

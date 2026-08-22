@@ -807,6 +807,7 @@ fn kit_aliases_are_visible_and_execute() {
     let kit_help = harness.run(&["k", "--help"]);
     assert!(kit_help.status.success(), "{}", stderr(&kit_help));
     let help_text = stdout(&kit_help);
+    assert!(help_text.contains("[alias: a]"), "{help_text}");
     assert!(help_text.contains("[alias: i]"), "{help_text}");
     assert!(help_text.contains("[alias: ls]"), "{help_text}");
 
@@ -820,6 +821,37 @@ fn kit_aliases_are_visible_and_execute() {
         harness.invocation("cargo").args,
         ["install", "--path", "./aliased-tool"]
     );
+}
+
+#[test]
+fn kit_add_tracks_without_installing_and_can_install_before_tracking() {
+    let harness = Harness::new(&["cargo"]);
+    let tracked_repo = harness.local_repository("tracked-only", &["Cargo.toml"], &[]);
+    let installed_repo = harness.local_repository("installed", &["Cargo.toml"], &[]);
+
+    let explain = harness.run(&["--explain", "kit", "add", &tracked_repo]);
+    assert!(explain.status.success(), "{}", stderr(&explain));
+    assert!(stdout(&explain).contains("track:    "));
+    assert!(!harness.kit_file().exists());
+    assert!(!harness.was_invoked("cargo"));
+
+    let added = harness.run(&["kit", "add", "--tool", "cargo", &tracked_repo]);
+    assert!(added.status.success(), "{}", stderr(&added));
+    assert!(stderr(&added).contains("tracked:"), "{}", stderr(&added));
+    assert!(!harness.was_invoked("cargo"));
+
+    let installed = harness.run(&["k", "a", "-i", &installed_repo]);
+    assert!(installed.status.success(), "{}", stderr(&installed));
+    assert_eq!(
+        harness.invocation("cargo").args,
+        ["install", "--path", "./installed"]
+    );
+
+    let config = fs::read_to_string(harness.kit_file()).unwrap();
+    assert_eq!(config.matches("[[install]]").count(), 2);
+    assert!(config.contains("tracked-only\""), "{config}");
+    assert!(config.contains("installed\""), "{config}");
+    assert_eq!(config.matches("tool = \"cargo\"").count(), 2, "{config}");
 }
 
 #[test]
@@ -1275,9 +1307,14 @@ fn kit_help_and_jobs_validation_are_explicit() {
     let help = harness.run(&["kit", "--help"]);
     assert!(help.status.success(), "{}", stderr(&help));
     let help_text = stdout(&help);
-    for subcommand in ["install", "list", "edit"] {
+    for subcommand in ["add", "install", "list", "edit"] {
         assert!(help_text.contains(subcommand), "{help_text}");
     }
+
+    let add_help = harness.run(&["kit", "add", "--help"]);
+    assert!(add_help.status.success(), "{}", stderr(&add_help));
+    let help_text = stdout(&add_help);
+    assert!(help_text.contains("-i, --install"), "{help_text}");
 
     let install_help = harness.run(&["kit", "install", "--help"]);
     assert!(install_help.status.success(), "{}", stderr(&install_help));

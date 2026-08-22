@@ -100,6 +100,10 @@ pub(crate) struct KitArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum KitCommand {
+    /// Add a repository to the kit
+    #[command(visible_alias = "a")]
+    Add(KitAddArgs),
+
     /// Install every repository in the kit
     #[command(visible_alias = "i")]
     Install(KitInstallArgs),
@@ -110,6 +114,41 @@ pub(crate) enum KitCommand {
 
     /// Edit the kit configuration
     Edit(KitFileArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct KitAddArgs {
+    /// Install the repository before adding it to the kit
+    #[arg(short = 'i', long)]
+    pub(crate) install: bool,
+
+    /// Installer to use; rust is an alias for cargo
+    #[arg(short = 't', long, default_value_t = InstallTool::Auto)]
+    pub(crate) tool: InstallTool,
+
+    /// Do not add @latest to a remote Go import path
+    #[arg(long)]
+    pub(crate) no_latest: bool,
+
+    /// Repository name, path, or remote; remote Go sources may end in @<query>
+    #[arg(value_name = "DTR_REPOSPEC", default_value = ".")]
+    pub(crate) repospec: OsString,
+
+    /// Native installer arguments, following --
+    #[arg(last = true, value_name = "INSTALL_ARG", num_args = 0..)]
+    pub(crate) install_args: Vec<OsString>,
+}
+
+impl KitAddArgs {
+    pub(crate) fn into_install_args(self) -> InstallArgs {
+        InstallArgs {
+            add: true,
+            tool: self.tool,
+            no_latest: self.no_latest,
+            repospec: self.repospec,
+            install_args: self.install_args,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -290,6 +329,12 @@ mod tests {
 
     #[test]
     fn kit_aliases_are_accepted() {
+        let add = Cli::try_parse_from(["dtr", "k", "a"]).expect("valid kit add alias");
+        let DtrCommand::Kit(args) = add.command else {
+            panic!("expected kit command");
+        };
+        assert!(matches!(args.command, KitCommand::Add(_)));
+
         let install = Cli::try_parse_from(["dtr", "k", "i"]).expect("valid kit install alias");
         let DtrCommand::Kit(args) = install.command else {
             panic!("expected kit command");
@@ -335,10 +380,50 @@ mod tests {
             };
             let file = match args.command {
                 KitCommand::List(args) | KitCommand::Edit(args) => args.file,
-                KitCommand::Install(_) => panic!("expected kit management command"),
+                KitCommand::Add(_) | KitCommand::Install(_) => {
+                    panic!("expected kit management command")
+                }
             };
             assert_eq!(file, Some(PathBuf::from("other.toml")));
         }
+    }
+
+    #[test]
+    fn kit_add_accepts_optional_install_and_install_arguments() {
+        for install_flag in ["-i", "--install"] {
+            let cli = Cli::try_parse_from([
+                "dtr",
+                "kit",
+                "add",
+                install_flag,
+                "--tool",
+                "cargo",
+                "owner/repo",
+                "--",
+                "--locked",
+            ])
+            .expect("valid kit add command");
+            let DtrCommand::Kit(args) = cli.command else {
+                panic!("expected kit command");
+            };
+            let KitCommand::Add(args) = args.command else {
+                panic!("expected kit add command");
+            };
+            assert!(args.install);
+            assert_eq!(args.tool, InstallTool::Cargo);
+            assert_eq!(args.repospec, "owner/repo");
+            assert_eq!(args.install_args, ["--locked"].map(OsString::from));
+        }
+
+        let cli = Cli::try_parse_from(["dtr", "kit", "add"]).expect("valid kit add command");
+        let DtrCommand::Kit(args) = cli.command else {
+            panic!("expected kit command");
+        };
+        let KitCommand::Add(args) = args.command else {
+            panic!("expected kit add command");
+        };
+        assert!(!args.install);
+        assert_eq!(args.repospec, ".");
     }
 
     #[test]

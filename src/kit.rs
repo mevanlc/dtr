@@ -144,6 +144,15 @@ pub(crate) fn run(
     narration_override: Option<bool>,
 ) -> Result<i32, DtrError> {
     let args = match args.command {
+        KitCommand::Add(args) => {
+            let install = args.install;
+            return run_add(
+                args.into_install_args(),
+                install,
+                explain,
+                narration_override,
+            );
+        }
         KitCommand::List(args) => return list(&selected_file_path(args.file, !explain)?),
         KitCommand::Edit(args) => {
             let path = selected_file_path(args.file, !explain)?;
@@ -261,6 +270,45 @@ pub(crate) fn run(
     Ok(i32::from(failed))
 }
 
+fn run_add(
+    args: InstallArgs,
+    install: bool,
+    explain: bool,
+    narration_override: Option<bool>,
+) -> Result<i32, DtrError> {
+    if install {
+        return run_install_and_add(args, explain, narration_override);
+    }
+
+    let path = if explain {
+        config::kit_file_path()?
+    } else {
+        config::migrate_legacy_kit_file()?
+    };
+    let loaded = load_optional(&path)?;
+    let home = home::home_dir();
+    let (entry, local_path) = InstallEntry::from_install_args(&args, home.as_deref())?;
+
+    if explain {
+        println!("track:    {}", display_path(&path));
+        return Ok(0);
+    }
+
+    let narration = match narration_override {
+        Some(narration) => narration,
+        None => Config::load_for_runtime()?.narration(),
+    };
+    track_entry(
+        loaded,
+        entry,
+        local_path.as_deref(),
+        &path,
+        home.as_deref(),
+        narration,
+    )?;
+    Ok(0)
+}
+
 pub(crate) fn run_install_and_add(
     args: InstallArgs,
     explain: bool,
@@ -295,10 +343,28 @@ pub(crate) fn run_install_and_add(
     }
 
     let loaded = load_optional(&path)?;
-    let identity = normalized_repository_identity(&entry, home.as_deref())?;
+    track_entry(
+        loaded,
+        entry,
+        local_path.as_deref(),
+        &path,
+        home.as_deref(),
+        narration,
+    )?;
+    Ok(0)
+}
+
+fn track_entry(
+    loaded: LoadedConfig,
+    entry: InstallEntry,
+    local_path: Option<&Path>,
+    path: &Path,
+    home: Option<&Path>,
+    narration: bool,
+) -> Result<(), DtrError> {
+    let identity = normalized_repository_identity(&entry, home)?;
     let existing = loaded.config.install.iter().position(|tracked| {
-        normalized_repository_identity(tracked, home.as_deref())
-            .is_ok_and(|tracked| tracked == identity)
+        normalized_repository_identity(tracked, home).is_ok_and(|tracked| tracked == identity)
     });
     let changed = existing.is_none_or(|index| loaded.config.install[index] != entry);
     if changed {
@@ -306,16 +372,15 @@ pub(crate) fn run_install_and_add(
             Some(index) => replace_entry(loaded.text, index, &entry)?,
             None => append_entry(loaded.text, &entry)?,
         };
-        write_atomic(&path, &text)?;
+        write_atomic(path, &text)?;
     }
     if narration && existing.is_none() {
         let repospec = local_path
-            .as_deref()
             .map(display_path)
             .unwrap_or_else(|| entry.repospec.clone());
-        eprintln!("{}", tracked_message(&repospec, &path));
+        eprintln!("{}", tracked_message(&repospec, path));
     }
-    Ok(0)
+    Ok(())
 }
 
 fn execute_jobs(
