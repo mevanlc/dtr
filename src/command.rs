@@ -26,6 +26,7 @@ pub(crate) struct CommandPlan {
     pub(crate) auth: Option<String>,
     pub(crate) environment: Vec<SecretEnvironment>,
     pub(crate) removed_environment: Vec<OsString>,
+    pub(crate) install_revision: Option<InstallRevision>,
 }
 
 pub(crate) enum PlanKind {
@@ -37,6 +38,29 @@ pub(crate) enum PlanKind {
 pub(crate) enum GoInstallSource {
     Local,
     Remote { import_path: OsString },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum InstallRevision {
+    LocalGit {
+        path: PathBuf,
+    },
+    RemoteGit {
+        remote: OsString,
+        reference: GitReference,
+    },
+    GoModule {
+        query: OsString,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GitReference {
+    Head,
+    Branch(OsString),
+    Tag(OsString),
+    Revision(OsString),
+    Unsupported,
 }
 
 pub(crate) struct SecretEnvironment {
@@ -828,6 +852,7 @@ mod tests {
             auth: None,
             environment: Vec::new(),
             removed_environment: Vec::new(),
+            install_revision: None,
         };
 
         assert_eq!(
@@ -855,6 +880,7 @@ mod tests {
             auth: None,
             environment: Vec::new(),
             removed_environment: Vec::new(),
+            install_revision: None,
         };
 
         assert_eq!(

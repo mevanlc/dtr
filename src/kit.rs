@@ -1,20 +1,21 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process;
+use std::process::{self, Command};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use serde::{Deserialize, Serialize};
-use toml_edit::{Array, DocumentMut, Item, Table, Value, value};
+use sha2::{Digest, Sha256};
+use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value, value};
 
 use crate::cli::{InstallArgs, InstallTool, Jobs, KitArgs, KitCommand};
 use crate::command::{
-    CommandPlan, DtrMessage, InterruptState, ToolOutput, config_parent, display_path, edit_file,
-    friendly_path, shell_quote_argument,
+    CommandPlan, DtrMessage, GitReference, InstallRevision, InterruptState, ToolOutput,
+    apply_environment, config_parent, display_path, edit_file, friendly_path, shell_quote_argument,
 };
 use crate::config::{self, Config};
 use crate::error::DtrError;
@@ -28,7 +29,7 @@ struct KitConfig {
     install: Vec<InstallEntry>,
 }
 
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct InstallEntry {
     repospec: String,
@@ -41,6 +42,16 @@ struct InstallEntry {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     args: Vec<String>,
+
+    #[serde(default, skip_serializing)]
+    installed: Option<InstalledState>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct InstalledState {
+    commit: String,
+    request: String,
 }
 
 struct LoadedConfig {
@@ -52,17 +63,27 @@ struct InstallJob {
     number: usize,
     repospec: String,
     plan: CommandPlan,
+    entry: InstallEntry,
+    request: String,
+    before_revision: Option<String>,
 }
 
 struct InstallJobResult {
     number: usize,
     succeeded: bool,
     messages: Vec<DtrMessage>,
+    state_update: Option<StateUpdate>,
+}
+
+struct StateUpdate {
+    entry: InstallEntry,
+    installed: Option<InstalledState>,
 }
 
 struct KitExecution {
     failed: bool,
     interrupted: bool,
+    state_updates: Vec<StateUpdate>,
 }
 
 impl InstallEntry {
@@ -124,6 +145,7 @@ impl InstallEntry {
                 tool: args.tool,
                 no_latest: args.no_latest,
                 args: install_args,
+                installed: None,
             },
             local_path,
         ))
@@ -170,18 +192,28 @@ pub(crate) fn run(
 
     let config = load_required(&path)?.config;
     let requested_jobs = args.jobs;
+    let force = args.force;
     let job_count = requested_jobs.resolve();
     let tool_output = match args.quiet {
         0 => ToolOutput::Inherit,
         1 => ToolOutput::SuppressStdout,
         _ => ToolOutput::SuppressStdoutAndStderr,
     };
+    let needs_install_config = config
+        .install
+        .iter()
+        .any(|entry| matches!(entry.tool, InstallTool::Auto | InstallTool::Uv));
+    let runtime_config = if narration_override.is_none() || needs_install_config {
+        Config::load_for_runtime()?
+    } else {
+        Config::default()
+    };
     let narration = if explain || args.quiet >= 3 {
         false
     } else {
         match narration_override {
             Some(narration) => narration,
-            None => Config::load_for_runtime()?.narration(),
+            None => runtime_config.narration(),
         }
     };
     let interrupted = if explain {
@@ -210,7 +242,11 @@ pub(crate) fn run(
         }
         let number = offset + 1;
         let repospec = entry.repospec.clone();
-        let plan = entry.into_args(home.as_deref()).and_then(plan_install);
+        let request = request_fingerprint(&entry, &runtime_config);
+        let plan = entry
+            .clone()
+            .into_args(home.as_deref())
+            .and_then(plan_install);
         if interrupted
             .as_ref()
             .is_some_and(|interrupted| interrupted.is_interrupted())
@@ -227,6 +263,7 @@ pub(crate) fn run(
                         number,
                         succeeded: false,
                         messages: vec![DtrMessage::Stderr(warning)],
+                        state_update: None,
                     });
                 }
                 failed = true;
@@ -234,10 +271,64 @@ pub(crate) fn run(
             }
         };
 
+        let before_revision = if explain && force {
+            None
+        } else {
+            match probe_install_revision(&plan) {
+                Ok(revision) => revision,
+                Err(error) => {
+                    let warning = cache_warning(number, &repospec, &error);
+                    eprintln!("{warning}");
+                    if !explain {
+                        preflight_results.push(InstallJobResult {
+                            number,
+                            succeeded: true,
+                            messages: vec![DtrMessage::Stderr(warning)],
+                            state_update: None,
+                        });
+                    }
+                    None
+                }
+            }
+        };
+        let cached = !force
+            && before_revision.as_ref().is_some_and(|commit| {
+                entry.installed.as_ref().is_some_and(|installed| {
+                    installed.commit == *commit && installed.request == request
+                })
+            });
+
         if explain {
             println!();
             println!("kit entry {number}:");
-            plan.explain();
+            if cached {
+                println!(
+                    "skip:     {} is already installed",
+                    short_revision(before_revision.as_deref().expect("cached revision"))
+                );
+            } else {
+                plan.explain();
+            }
+            continue;
+        }
+
+        if cached {
+            let message = format!(
+                "up to date: {} @ {} (skipped)",
+                repospec,
+                short_revision(before_revision.as_deref().expect("cached revision"))
+            );
+            let messages = if narration {
+                vec![DtrMessage::Stderr(message)]
+            } else {
+                Vec::new()
+            };
+            preflight_results.push(InstallJobResult {
+                number,
+                succeeded: true,
+                messages,
+                state_update: None,
+            });
             continue;
         }
 
@@ -245,6 +336,9 @@ pub(crate) fn run(
             number,
             repospec,
             plan,
+            entry,
+            request,
+            before_revision,
         });
     }
 
@@ -259,6 +353,9 @@ pub(crate) fn run(
                 .as_deref()
                 .expect("live kit runs install an interrupt handler"),
         );
+        if let Err(error) = persist_state_updates(&path, execution.state_updates, home.as_deref()) {
+            eprintln!("dtr: warning: could not refresh install state: {error}");
+        }
         if execution.interrupted {
             return Ok(130);
         }
@@ -305,6 +402,7 @@ fn run_add(
         &path,
         home.as_deref(),
         narration,
+        true,
     )?;
     Ok(0)
 }
@@ -333,15 +431,33 @@ pub(crate) fn run_install_and_add(
         return Ok(0);
     }
 
+    let runtime_config = if narration_override.is_none()
+        || matches!(entry.tool, InstallTool::Auto | InstallTool::Uv)
+    {
+        Config::load_for_runtime()?
+    } else {
+        Config::default()
+    };
     let narration = match narration_override {
         Some(narration) => narration,
-        None => Config::load_for_runtime()?.narration(),
+        None => runtime_config.narration(),
+    };
+    let request = request_fingerprint(&entry, &runtime_config);
+    let before_revision = match probe_install_revision(&plan) {
+        Ok(revision) => revision,
+        Err(error) => {
+            eprintln!("dtr: warning: install state could not be inspected: {error}");
+            None
+        }
     };
     let code = plan.execute(narration)?;
     if code != 0 {
         return Ok(code);
     }
 
+    entry.installed = successful_install_state(&plan, before_revision, request, |warning| {
+        eprintln!("dtr: warning: install state could not be refreshed: {warning}");
+    });
     let loaded = load_optional(&path)?;
     track_entry(
         loaded,
@@ -350,22 +466,30 @@ pub(crate) fn run_install_and_add(
         &path,
         home.as_deref(),
         narration,
+        false,
     )?;
     Ok(0)
 }
 
 fn track_entry(
     loaded: LoadedConfig,
-    entry: InstallEntry,
+    mut entry: InstallEntry,
     local_path: Option<&Path>,
     path: &Path,
     home: Option<&Path>,
     narration: bool,
+    preserve_matching_state: bool,
 ) -> Result<(), DtrError> {
     let identity = normalized_repository_identity(&entry, home)?;
     let existing = loaded.config.install.iter().position(|tracked| {
         normalized_repository_identity(tracked, home).is_ok_and(|tracked| tracked == identity)
     });
+    if preserve_matching_state
+        && let Some(index) = existing
+        && same_install_request(&loaded.config.install[index], &entry)
+    {
+        entry.installed = loaded.config.install[index].installed.clone();
+    }
     let changed = existing.is_none_or(|index| loaded.config.install[index] != entry);
     if changed {
         let text = match existing {
@@ -427,7 +551,11 @@ fn execute_jobs(
         .expect("kit results should not be poisoned");
     results.sort_by_key(|result| result.number);
     let failed = results.iter().any(|result| !result.succeeded);
-    for result in results {
+    let mut state_updates = Vec::new();
+    for mut result in results {
+        if let Some(update) = result.state_update.take() {
+            state_updates.push(update);
+        }
         for message in result.messages {
             message.emit();
         }
@@ -435,6 +563,7 @@ fn execute_jobs(
     KitExecution {
         failed,
         interrupted: interrupted.is_interrupted(),
+        state_updates,
     }
 }
 
@@ -448,11 +577,28 @@ fn execute_job(
     let execution =
         job.plan
             .execute_with_replay(narration, &mut messages, interrupted, tool_output);
+    let mut state_update = None;
     let succeeded = if interrupted.is_interrupted() {
         false
     } else {
         match execution {
-            Ok(0) => true,
+            Ok(0) => {
+                let installed = successful_install_state(
+                    &job.plan,
+                    job.before_revision.clone(),
+                    job.request.clone(),
+                    |error| {
+                        let warning = cache_warning(job.number, &job.repospec, &error);
+                        eprintln!("{warning}");
+                        messages.push(DtrMessage::Stderr(warning));
+                    },
+                );
+                state_update = Some(StateUpdate {
+                    entry: job.entry.clone(),
+                    installed,
+                });
+                true
+            }
             Ok(code) => {
                 let warning = format!(
                     "dtr: warning: kit entry {} ({:?}) exited with status {code}",
@@ -474,6 +620,7 @@ fn execute_job(
         number: job.number,
         succeeded,
         messages,
+        state_update,
     }
 }
 
@@ -665,6 +812,322 @@ fn backend_tool(backend: &str) -> Result<InstallTool, DtrError> {
     }
 }
 
+fn same_install_request(left: &InstallEntry, right: &InstallEntry) -> bool {
+    left.repospec == right.repospec
+        && left.tool == right.tool
+        && left.no_latest == right.no_latest
+        && left.args == right.args
+}
+
+fn request_fingerprint(entry: &InstallEntry, config: &Config) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"dtr-kit-install-request-v1");
+    fingerprint_component(&mut digest, b"repospec");
+    fingerprint_component(&mut digest, entry.repospec.as_bytes());
+    fingerprint_component(&mut digest, b"tool");
+    fingerprint_component(&mut digest, entry.tool.to_string().as_bytes());
+    fingerprint_component(&mut digest, b"no_latest");
+    fingerprint_component(&mut digest, &[u8::from(entry.no_latest)]);
+    fingerprint_component(&mut digest, b"args");
+    fingerprint_component(
+        &mut digest,
+        &u64::try_from(entry.args.len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    for argument in &entry.args {
+        fingerprint_component(&mut digest, argument.as_bytes());
+    }
+    if matches!(entry.tool, InstallTool::Auto | InstallTool::Uv) {
+        let options = config.uv_install_options();
+        fingerprint_component(&mut digest, b"uv_install_options");
+        fingerprint_component(
+            &mut digest,
+            &u64::try_from(options.len())
+                .unwrap_or(u64::MAX)
+                .to_be_bytes(),
+        );
+        for option in options {
+            fingerprint_component(&mut digest, option.as_bytes());
+        }
+    }
+    format!("sha256:{:x}", digest.finalize())
+}
+
+fn fingerprint_component(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_be_bytes());
+    digest.update(bytes);
+}
+
+fn probe_install_revision(plan: &CommandPlan) -> Result<Option<String>, String> {
+    match plan.install_revision.as_ref() {
+        Some(InstallRevision::LocalGit { path }) => probe_local_revision(path),
+        Some(InstallRevision::RemoteGit { remote, reference }) => {
+            probe_remote_revision(plan, remote, reference)
+        }
+        Some(InstallRevision::GoModule { query }) => probe_go_module_revision(plan, query),
+        None => Ok(None),
+    }
+}
+
+fn probe_local_revision(path: &Path) -> Result<Option<String>, String> {
+    if !path
+        .ancestors()
+        .any(|ancestor| ancestor.join(".git").exists())
+    {
+        return Ok(None);
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .map_err(|error| format!("could not start git for local revision inspection: {error}"))?;
+    if !output.status.success() {
+        return Err("git rev-parse could not resolve the local repository HEAD".to_owned());
+    }
+    let commit = parse_single_object_id(&output.stdout)
+        .ok_or_else(|| "git rev-parse did not return one full object ID".to_owned())?;
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args([
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=normal",
+            "--ignore-submodules=none",
+        ])
+        .output()
+        .map_err(|error| format!("could not start git for worktree inspection: {error}"))?;
+    if !status.status.success() {
+        return Err("git status could not inspect the local worktree".to_owned());
+    }
+    if status.stdout.is_empty() {
+        Ok(Some(commit))
+    } else {
+        Ok(None)
+    }
+}
+
+fn probe_remote_revision(
+    plan: &CommandPlan,
+    remote: &std::ffi::OsStr,
+    reference: &GitReference,
+) -> Result<Option<String>, String> {
+    if *reference == GitReference::Unsupported {
+        return Ok(None);
+    }
+    if let GitReference::Revision(revision) = reference
+        && revision.to_str().is_some_and(is_full_object_id)
+    {
+        return Ok(Some(revision.to_string_lossy().to_ascii_lowercase()));
+    }
+
+    let patterns = match reference {
+        GitReference::Head => vec![std::ffi::OsString::from("HEAD")],
+        GitReference::Branch(branch) => {
+            vec![format!("refs/heads/{}", branch.to_string_lossy()).into()]
+        }
+        GitReference::Tag(tag) => vec![
+            format!("refs/tags/{}", tag.to_string_lossy()).into(),
+            format!("refs/tags/{}^{{}}", tag.to_string_lossy()).into(),
+        ],
+        GitReference::Revision(_) => Vec::new(),
+        GitReference::Unsupported => unreachable!(),
+    };
+    let mut command = Command::new("git");
+    command.args([
+        std::ffi::OsStr::new("ls-remote"),
+        std::ffi::OsStr::new("--"),
+    ]);
+    command.arg(remote).args(&patterns);
+    apply_environment(&mut command, &plan.environment, &plan.removed_environment);
+    let output = command
+        .output()
+        .map_err(|error| format!("could not start git for remote revision inspection: {error}"))?;
+    if !output.status.success() {
+        return Err("git ls-remote could not inspect the selected remote revision".to_owned());
+    }
+    resolve_ls_remote_output(&output.stdout, reference)
+}
+
+fn resolve_ls_remote_output(
+    output: &[u8],
+    reference: &GitReference,
+) -> Result<Option<String>, String> {
+    let text = std::str::from_utf8(output)
+        .map_err(|_| "git ls-remote returned non-UTF-8 output".to_owned())?;
+    let refs = text
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .filter(|(object, _)| is_full_object_id(object))
+        .collect::<Vec<_>>();
+    let selected = match reference {
+        GitReference::Head => refs
+            .iter()
+            .find(|(_, name)| *name == "HEAD")
+            .map(|(object, _)| object.to_ascii_lowercase()),
+        GitReference::Branch(branch) => {
+            let name = format!("refs/heads/{}", branch.to_string_lossy());
+            refs.iter()
+                .find(|(_, candidate)| *candidate == name)
+                .map(|(object, _)| object.to_ascii_lowercase())
+        }
+        GitReference::Tag(tag) => {
+            let peeled = format!("refs/tags/{}^{{}}", tag.to_string_lossy());
+            let direct = format!("refs/tags/{}", tag.to_string_lossy());
+            refs.iter()
+                .find(|(_, candidate)| *candidate == peeled)
+                .or_else(|| refs.iter().find(|(_, candidate)| *candidate == direct))
+                .map(|(object, _)| object.to_ascii_lowercase())
+        }
+        GitReference::Revision(revision) => {
+            let Some(prefix) = revision.to_str().map(str::to_ascii_lowercase) else {
+                return Ok(None);
+            };
+            let matches = refs
+                .iter()
+                .map(|(object, _)| object.to_ascii_lowercase())
+                .filter(|object| object.starts_with(&prefix))
+                .collect::<HashSet<_>>();
+            (matches.len() == 1).then(|| matches.into_iter().next().expect("one object ID"))
+        }
+        GitReference::Unsupported => None,
+    };
+    Ok(selected)
+}
+
+#[derive(Deserialize)]
+struct GoModuleResolution {
+    #[serde(rename = "Origin")]
+    origin: Option<GoModuleOrigin>,
+}
+
+#[derive(Deserialize)]
+struct GoModuleOrigin {
+    #[serde(rename = "VCS")]
+    vcs: Option<String>,
+    #[serde(rename = "Hash")]
+    hash: Option<String>,
+}
+
+fn probe_go_module_revision(
+    plan: &CommandPlan,
+    query: &std::ffi::OsStr,
+) -> Result<Option<String>, String> {
+    let mut command = Command::new(&plan.executable);
+    command.args([
+        std::ffi::OsStr::new("list"),
+        std::ffi::OsStr::new("-m"),
+        std::ffi::OsStr::new("-json"),
+    ]);
+    command.arg(query);
+    apply_environment(&mut command, &plan.environment, &plan.removed_environment);
+    let output = command
+        .output()
+        .map_err(|error| format!("could not start go for module revision inspection: {error}"))?;
+    if !output.status.success() {
+        return Err("go list could not resolve the selected module version".to_owned());
+    }
+    let module: GoModuleResolution = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("go list returned invalid module metadata: {error}"))?;
+    let Some(origin) = module
+        .origin
+        .filter(|origin| origin.vcs.as_deref() == Some("git"))
+    else {
+        return Ok(None);
+    };
+    Ok(origin
+        .hash
+        .filter(|hash| is_full_object_id(hash))
+        .map(|hash| hash.to_ascii_lowercase()))
+}
+
+fn parse_single_object_id(bytes: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(bytes).ok()?.trim();
+    is_full_object_id(text).then(|| text.to_ascii_lowercase())
+}
+
+fn is_full_object_id(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn successful_install_state(
+    plan: &CommandPlan,
+    before_revision: Option<String>,
+    request: String,
+    mut warn: impl FnMut(String),
+) -> Option<InstalledState> {
+    let before_revision = before_revision?;
+    match probe_install_revision(plan) {
+        Ok(Some(after_revision)) if after_revision == before_revision => Some(InstalledState {
+            commit: after_revision,
+            request,
+        }),
+        Ok(Some(_)) => {
+            warn("the selected Git revision changed while the installer was running".to_owned());
+            None
+        }
+        Ok(None) => {
+            warn("the installed Git revision could no longer be verified".to_owned());
+            None
+        }
+        Err(error) => {
+            warn(error);
+            None
+        }
+    }
+}
+
+fn short_revision(revision: &str) -> &str {
+    revision.get(..12).unwrap_or(revision)
+}
+
+fn cache_warning(number: usize, repospec: &str, error: &str) -> String {
+    format!("dtr: warning: kit entry {number} ({repospec:?}) install cache: {error}")
+}
+
+fn persist_state_updates(
+    path: &Path,
+    updates: Vec<StateUpdate>,
+    home: Option<&Path>,
+) -> Result<(), DtrError> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+    let mut loaded = load_required(path)?;
+    let mut changed = false;
+    for update in updates {
+        let identity = normalized_repository_identity(&update.entry, home)?;
+        let Some(index) = loaded.config.install.iter().position(|entry| {
+            normalized_repository_identity(entry, home).is_ok_and(|candidate| candidate == identity)
+        }) else {
+            eprintln!(
+                "dtr: warning: did not refresh install state for {:?} because its kit entry was removed",
+                update.entry.repospec
+            );
+            continue;
+        };
+        if !same_install_request(&loaded.config.install[index], &update.entry) {
+            eprintln!(
+                "dtr: warning: did not refresh install state for {:?} because its kit entry changed",
+                update.entry.repospec
+            );
+            continue;
+        }
+        if loaded.config.install[index].installed == update.installed {
+            continue;
+        }
+        loaded.config.install[index].installed = update.installed;
+        loaded.text = replace_entry(loaded.text, index, &loaded.config.install[index])?;
+        changed = true;
+    }
+    if changed {
+        write_atomic(path, &loaded.text)?;
+    }
+    Ok(())
+}
+
 fn tracked_local_path(path: &Path, home: Option<&Path>) -> Result<String, DtrError> {
     #[cfg(not(windows))]
     if let Some(home) = home {
@@ -705,6 +1168,11 @@ fn append_entry(mut text: String, entry: &InstallEntry) -> Result<String, DtrErr
         &toml::to_string(entry)
             .map_err(|error| DtrError::new(format!("could not serialize kit entry: {error}")))?,
     );
+    if let Some(installed) = &entry.installed {
+        text.push_str("installed = ");
+        text.push_str(&installed_value(installed).to_string());
+        text.push('\n');
+    }
     Ok(text)
 }
 
@@ -737,7 +1205,19 @@ fn replace_entry(text: String, index: usize, entry: &InstallEntry) -> Result<Str
         (!entry.args.is_empty())
             .then(|| Value::Array(Array::from_iter(entry.args.iter().map(String::as_str)))),
     );
+    set_optional_table_value(
+        table,
+        "installed",
+        entry.installed.as_ref().map(installed_value),
+    );
     Ok(document.to_string())
+}
+
+fn installed_value(installed: &InstalledState) -> Value {
+    let mut table = InlineTable::new();
+    table.insert("commit", Value::from(installed.commit.as_str()));
+    table.insert("request", Value::from(installed.request.as_str()));
+    Value::InlineTable(table)
 }
 
 fn set_optional_table_value(table: &mut Table, key: &str, new_value: Option<Value>) {
@@ -880,10 +1360,68 @@ mod tests {
             tool: InstallTool::Auto,
             no_latest: false,
             args: Vec::new(),
+            installed: None,
         };
         assert_eq!(
             append_entry("# keep this comment\n".to_owned(), &entry).unwrap(),
             "# keep this comment\n\n[[install]]\nrepospec = \"~/p/my/tool\"\n"
+        );
+    }
+
+    #[test]
+    fn installed_state_round_trips_as_an_inline_generated_table() {
+        let entry = InstallEntry {
+            repospec: "owner/tool".to_owned(),
+            tool: InstallTool::Cargo,
+            no_latest: false,
+            args: Vec::new(),
+            installed: Some(InstalledState {
+                commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+                request: format!("sha256:{}", "a".repeat(64)),
+            }),
+        };
+        let text = append_entry(String::new(), &entry).unwrap();
+        assert!(
+            text.contains(
+                "installed = { commit = \"0123456789abcdef0123456789abcdef01234567\", request = \"sha256:"
+            ),
+            "{text}"
+        );
+        let parsed: KitConfig = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.install[0], entry);
+    }
+
+    #[test]
+    fn remote_ref_resolution_prefers_peeled_tags_and_requires_unique_revisions() {
+        const DIRECT: &str = "1111111111111111111111111111111111111111";
+        const PEELED: &str = "2222222222222222222222222222222222222222";
+        let output = format!(
+            "{DIRECT}\trefs/tags/v1\n{PEELED}\trefs/tags/v1^{{}}\n{PEELED}\trefs/heads/main\n"
+        );
+        assert_eq!(
+            resolve_ls_remote_output(output.as_bytes(), &GitReference::Tag("v1".into())).unwrap(),
+            Some(PEELED.to_owned())
+        );
+        assert_eq!(
+            resolve_ls_remote_output(output.as_bytes(), &GitReference::Branch("main".into()))
+                .unwrap(),
+            Some(PEELED.to_owned())
+        );
+        assert_eq!(
+            resolve_ls_remote_output(
+                output.as_bytes(),
+                &GitReference::Revision("22222222".into())
+            )
+            .unwrap(),
+            Some(PEELED.to_owned())
+        );
+        assert_eq!(
+            resolve_ls_remote_output(
+                format!("{DIRECT}\trefs/heads/one\n{PEELED}\trefs/heads/two\n").as_bytes(),
+                &GitReference::Revision("2".into())
+            )
+            .unwrap(),
+            Some(PEELED.to_owned())
         );
     }
 
@@ -909,6 +1447,7 @@ mod tests {
             tool: InstallTool::Cargo,
             no_latest: false,
             args: vec!["--features".to_owned(), "pcre2".to_owned()],
+            installed: None,
         };
         let repository = home.join("p/my/tool with spaces");
         assert_eq!(
@@ -936,6 +1475,7 @@ mod tests {
             tool: InstallTool::Cargo,
             no_latest: false,
             args: Vec::new(),
+            installed: None,
         };
         assert_eq!(
             append_entry(String::new(), &entry).unwrap(),

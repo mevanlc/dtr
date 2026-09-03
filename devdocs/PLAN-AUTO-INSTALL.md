@@ -53,6 +53,18 @@ reject multiple entries with the same normalized repository identity. Existing
 file text is preserved. Explain mode reports the target without mutating it;
 failed installs are not tracked.
 
+Successful Git-based tracked installs now carry generated `installed` state in
+their kit entry: a full commit object ID plus a versioned SHA-256 fingerprint of
+the install request. `kit install` skips matching clean local worktrees and
+matching remote selections by default; `--force` bypasses this optimization.
+Local state requires identical clean pre/post snapshots. Remote state covers
+Cargo HEAD/branch/tag/resolvable-revision selectors, default Git selections for
+the Python and npm backends, and exact Git origins reported by Go module
+resolution. Mutable remote selections also require identical pre/post results.
+Probe failures warn and install, while successful batches atomically merge state
+back into the selected default or alternate kit without overwriting entries
+edited during execution.
+
 ※ `dtr kit install` originally always retained native child output. It now
 accepts a counted `-q`/`--quiet`: one occurrence suppresses installer stdout and
 two suppress installer stderr as well; a third also disables dtr narration.
@@ -201,6 +213,7 @@ remain byte-safe where the underlying platform permits non-UTF-8 paths.
 17. [x] Rename that collection to the `kit` command namespace and `kit.toml`.
 18. [x] Add visible `k`, `k i`, and `k ls` aliases for the kit command hierarchy.
 19. [x] Add `kit add|a`, installing by default with an opt-out `--no-install`.
+20. [x] Cache successful stable Git revisions and skip matching kit installs by default.
 
 ## Validation record
 

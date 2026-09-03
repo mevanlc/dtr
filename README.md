@@ -397,8 +397,8 @@ dtr install --tool go ./my-tool
 The implementation sets the child process working directory directly; it never
 constructs a shell command.
 
-Use `--add` to install normally and then track the successful request in the
-default `kit.toml`:
+Use `-a` or `--add` to install normally and then track the successful request
+in the default `kit.toml`:
 
 ```sh
 dtr install --add --tool cargo ./my-tool -- --force --features color
@@ -412,14 +412,16 @@ surrounding formatting remain intact. Local paths are
 canonicalized; Unix paths below the user home directory are stored with `~/`,
 while Windows paths are stored without a `\\?\` prefix and use `\` separators;
 an automatically selected backend is recorded explicitly so later batch runs
-repeat the same installer choice. `--explain` reports the file that would be
+repeat the same installer choice. When dtr can prove that a Git-based install
+used one stable revision, it also records the full commit and a SHA-256
+fingerprint of the install request. `--explain` reports the file that would be
 updated without installing or writing it.
 
 ## Manage an installation kit
 
 ```text
 dtr [--explain|-n] [--narration|--no-narration] kit|k add|a [--no-install] [-t|--tool <tool>] [--no-latest] [<dtr-repospec>] [-- <install-arg>...]
-dtr [--explain|-n] [--narration|--no-narration] kit|k install|i [-j|--jobs <n|auto>] [-q|--quiet] [--file <FILE>]
+dtr [--explain|-n] [--narration|--no-narration] kit|k install|i [-j|--jobs <n|auto>] [-q|--quiet] [--force] [--file <FILE>]
 dtr kit|k list|ls [--file <FILE>]
 dtr [--explain|-n] kit|k edit [--file <FILE>]
 ```
@@ -440,6 +442,30 @@ it.
 `[[install]]` entry in file order. `DTR_CONFIG_DIR` overrides the containing
 directory just as it does for `config.toml`.
 
+Before installing, dtr checks any generated `installed` state. If both the
+request fingerprint and selected Git commit still match, the entry is reported
+as up to date and skipped. The skip message follows narration settings, so
+`--no-narration` and `-qqq` suppress it, and each skipped entry is reported only
+once in the final ordered replay. `--force` bypasses every cached skip,
+runs the installers, and refreshes the resulting state. Explain mode reports
+skip decisions without invoking an installer; with `--force`, it prints every
+normal install plan.
+
+Local repositories are cacheable only when the whole worktree is clean before
+and after installation and remains at the same commit. Tracked changes,
+untracked files, and dirty submodules prevent caching; ignored files do not.
+Remote Cargo installs support the default HEAD, explicit branches, peeled tags,
+and revisions that can be mapped unambiguously to a full object ID. Remote uv,
+pipx, and npm installs track the default HEAD. Versioned Go installs use Go's
+module-origin metadata only when it identifies an exact Git commit. Mutable
+remote selections must resolve to the same commit before and after installation.
+Other sources continue to install normally without generated state.
+
+Git or module probe failures produce a warning and fall back to installation.
+They do not turn a successful installer result into a failure. A successful
+install that cannot be tied safely to a commit clears stale state rather than
+risking a false skip.
+
 On the first non-explain operation that uses the default file, dtr silently
 renames a sibling `install-all.toml` to `kit.toml` when `kit.toml` does not yet
 exist. If both files exist, dtr uses `kit.toml` and leaves `install-all.toml`
@@ -447,7 +473,8 @@ untouched. Explain mode and explicit `--file` paths do not perform this migratio
 
 `--file FILE` selects an alternate kit TOML file for install, list, or edit.
 `kit list` prints each tracked entry as a shell-safe, reusable
-`dtr install ...` command without invoking an installer. `kit edit` launches
+`dtr install ...` command without invoking an installer; generated install state
+is not included in that command. `kit edit` launches
 the first configured or available editor in this order:
 `DTR_EDITOR`, `VISUAL`, `EDITOR`, `vim`, then `vi`. Environment-provided editor
 commands may contain quoted arguments, such as `DTR_EDITOR='code --wait'`. Dtr
@@ -472,7 +499,10 @@ Each entry requires `repospec`. It accepts the same repository references as
 defaults to `false`, and `args` is an array of native installer arguments with
 the same validation as arguments following `dtr install ... --`. A kit may have
 only one entry for each normalized repository; equivalent local paths and remote
-repository spellings count as the same repository.
+repository spellings count as the same repository. After successful installs,
+dtr atomically refreshes eligible entries in the selected default or `--file`
+kit while preserving comments and surrounding formatting. If the entry was
+edited while its installer ran, dtr warns and leaves it untouched.
 
 For example, this rebuilds one Cargo repository with its default features and
 ripgrep with PCRE2 enabled:
@@ -482,6 +512,7 @@ ripgrep with PCRE2 enabled:
 repospec = "~/p/my/dtr"
 tool = "cargo"
 args = ["--force"]
+installed = { commit = "0123456789abcdef0123456789abcdef01234567", request = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
 
 [[install]]
 repospec = "~/p/my/ripgrep"
@@ -489,12 +520,19 @@ tool = "cargo"
 args = ["--force", "--features", "pcre2"]
 ```
 
+`installed` is generated state. Its `commit` is the exact Git object installed;
+`request` covers the repository, tool, Go-version behavior, native arguments,
+and relevant dtr-managed installer options. Editing any of those inputs causes
+the next kit run to install again and replace the state. Removing `installed`
+also forces that entry's next normal installation.
+
 Malformed or missing configuration is a fatal error. Once the file has been
 loaded, an entry that cannot be planned, started, or completed emits a warning;
 dtr continues with the remaining entries and exits with status 1 after any such
-failure. Native installer output is left visible unless `--quiet` is used. Use
-`dtr --explain kit install` to print the resolved job count and every plan
-without running an installer.
+failure. Successful entries still refresh their state when another entry fails.
+Native installer output is left visible unless `--quiet` is used. Use
+`dtr --explain kit install` to print the resolved job count and each install or
+skip decision without running an installer.
 Enabled kit-install narration remains visible while jobs run and is replayed in
 configuration order after every build and install has completed. PATH warnings
 are included in the final replay even when narration is disabled.

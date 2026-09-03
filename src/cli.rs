@@ -172,6 +172,10 @@ pub(crate) struct KitInstallArgs {
     /// Suppress installer stdout; repeat for stderr, then dtr narration
     #[arg(short = 'q', long, action = ArgAction::Count)]
     pub(crate) quiet: u8,
+
+    /// Install even when the recorded Git revision is still current
+    #[arg(long)]
+    pub(crate) force: bool,
 }
 
 #[derive(Debug, Args)]
@@ -369,6 +373,17 @@ mod tests {
         assert_eq!(args.jobs, Jobs::Auto);
         assert_eq!(args.file, None);
         assert_eq!(args.quiet, 0);
+        assert!(!args.force);
+
+        let cli = Cli::try_parse_from(["dtr", "kit", "install", "--force"])
+            .expect("valid forced kit install");
+        let DtrCommand::Kit(args) = cli.command else {
+            panic!("expected kit command");
+        };
+        let KitCommand::Install(args) = args.command else {
+            panic!("expected kit install command");
+        };
+        assert!(args.force);
     }
 
     #[test]

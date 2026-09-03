@@ -35,6 +35,11 @@ impl Harness {
         fs::create_dir_all(&bin).unwrap();
         fs::create_dir_all(&log).unwrap();
         fs::create_dir_all(&work).unwrap();
+        let printf = env::split_paths(&env::var_os("PATH").expect("test PATH"))
+            .map(|directory| directory.join("printf"))
+            .find(|candidate| candidate.is_file())
+            .expect("printf on the test runner PATH");
+        std::os::unix::fs::symlink(printf, bin.join("printf")).unwrap();
         for program in programs {
             write_stub(&bin.join(program));
         }
@@ -58,6 +63,7 @@ impl Harness {
             .current_dir(&self.work)
             .env_clear()
             .env("PATH", &self.bin)
+            .env("HOME", home::home_dir().expect("test home directory"))
             .env("DTR_TEST_LOG_DIR", &self.log)
             .env("DTR_TEST_GH_OWNER", "mevanlc")
             .env("DTR_CONFIG_DIR", &self.config);
@@ -167,6 +173,14 @@ impl Harness {
         }
         format!("./{name}")
     }
+
+    fn expose_real_program(&self, program: &str) {
+        let executable = env::split_paths(&env::var_os("PATH").expect("test PATH"))
+            .map(|directory| directory.join(program))
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| panic!("could not find {program} on the test runner PATH"));
+        std::os::unix::fs::symlink(executable, self.bin.join(program)).unwrap();
+    }
 }
 
 #[derive(Debug)]
@@ -208,6 +222,28 @@ if [ "${0##*/}" = git ] && [ "${1-}" = -C ] && [ "${3-}" = rev-parse ] && [ "${4
     exit 0
   fi
   exit 128
+fi
+
+if [ "${0##*/}" = git ] && [ "${1-}" = ls-remote ]; then
+  log="${DTR_TEST_LOG_DIR}/git-ls-remote"
+  : > "$log"
+  printf 'cwd=<%s>\n' "$PWD" >> "$log"
+  for arg in "$@"; do
+    printf 'arg=<%s>\n' "$arg" >> "$log"
+  done
+  if [ -n "${GIT_CONFIG_COUNT-}" ]; then
+    printf 'git_config_count=<%s>\n' "$GIT_CONFIG_COUNT" >> "$log"
+  fi
+  for key in "${GIT_CONFIG_KEY_0-}" "${GIT_CONFIG_KEY_1-}" "${GIT_CONFIG_KEY_2-}"; do
+    if [ -n "$key" ]; then
+      printf 'git_config_key=<%s>\n' "$key" >> "$log"
+    fi
+  done
+  case "${GIT_CONFIG_VALUE_0-}${GIT_CONFIG_VALUE_1-}${GIT_CONFIG_VALUE_2-}" in
+    *'Authorization: Basic '*) printf 'git_auth_header_present=<yes>\n' >> "$log" ;;
+  esac
+  printf '%s' "${DTR_TEST_GIT_LS_REMOTE_OUTPUT-}"
+  exit "${DTR_TEST_GIT_LS_REMOTE_EXIT-0}"
 fi
 
 if [ "${0##*/}" = gh ] && [ "${1-}" = api ] && [ "${2-}" = user ]; then
@@ -306,6 +342,17 @@ if [ "${0##*/}" = git ] && [ "${1-}" = -C ] && [ -n "${DTR_TEST_GIT_TREE_MARKER-
   done
   printf '100644 blob abc\t%s\0' "$DTR_TEST_GIT_TREE_MARKER"
   exit 0
+fi
+
+if [ "${0##*/}" = go ] && [ "${1-}" = list ] && [ "${2-}" = -m ]; then
+  log="${DTR_TEST_LOG_DIR}/go-module"
+  : > "$log"
+  printf 'cwd=<%s>\n' "$PWD" >> "$log"
+  for arg in "$@"; do
+    printf 'arg=<%s>\n' "$arg" >> "$log"
+  done
+  printf '%s\n' "${DTR_TEST_GO_MODULE_JSON-\{\}}"
+  exit "${DTR_TEST_GO_MODULE_EXIT-0}"
 fi
 
 if [ "${0##*/}" = go ] && [ "${1-}" = list ]; then
@@ -411,6 +458,41 @@ fn write_executable(path: &Path) {
     let mut permissions = fs::metadata(path).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions).unwrap();
+}
+
+fn initialize_git_repository(path: &Path) -> String {
+    let run = |arguments: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(arguments)
+            .output()
+            .expect("git should start");
+        assert!(
+            output.status.success(),
+            "git {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run(&["init", "-q"]);
+    run(&["add", "."]);
+    run(&[
+        "-c",
+        "user.name=dtr test",
+        "-c",
+        "user.email=dtr@example.invalid",
+        "commit",
+        "-qm",
+        "initial",
+    ]);
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 
 fn stdout(output: &Output) -> String {
@@ -867,6 +949,187 @@ fn kit_add_installs_by_default_and_can_track_without_installing() {
     assert!(config.contains("tracked-only\""), "{config}");
     assert!(config.contains("installed\""), "{config}");
     assert_eq!(config.matches("tool = \"cargo\"").count(), 2, "{config}");
+}
+
+#[test]
+fn local_git_installs_record_clean_commits_skip_and_force() {
+    let harness = Harness::new(&["cargo"]);
+    harness.expose_real_program("git");
+    let repospec = harness.local_repository("cached-tool", &["Cargo.toml"], &[]);
+    let repository = harness.work.join("cached-tool");
+    let commit = initialize_git_repository(&repository);
+
+    let added = harness.run(&["kit", "add", "--tool", "cargo", &repospec]);
+    assert!(added.status.success(), "{}", stderr(&added));
+    let config = fs::read_to_string(harness.kit_file()).unwrap();
+    assert!(
+        config.contains(&format!("commit = \"{commit}\"")),
+        "{config}"
+    );
+    assert!(config.contains("request = \"sha256:"), "{config}");
+
+    fs::remove_file(harness.log.join("cargo")).unwrap();
+    let cached = harness.run(&["kit", "install"]);
+    assert!(cached.status.success(), "{}", stderr(&cached));
+    assert!(!harness.was_invoked("cargo"));
+    assert_eq!(
+        stderr(&cached).matches("up to date:").count(),
+        1,
+        "{}",
+        stderr(&cached)
+    );
+
+    let edited = fs::read_to_string(harness.kit_file()).unwrap().replace(
+        "tool = \"cargo\"\n",
+        "tool = \"cargo\"\nargs = [\"--locked\"]\n",
+    );
+    fs::write(harness.kit_file(), edited).unwrap();
+    let changed_request = harness.run(&["kit", "install"]);
+    assert!(
+        changed_request.status.success(),
+        "{}",
+        stderr(&changed_request)
+    );
+    assert_eq!(
+        harness.invocation("cargo").args.last().map(String::as_str),
+        Some("--locked")
+    );
+
+    fs::remove_file(harness.log.join("cargo")).unwrap();
+    let forced = harness.run(&["kit", "install", "--force"]);
+    assert!(forced.status.success(), "{}", stderr(&forced));
+    assert!(harness.was_invoked("cargo"));
+
+    fs::remove_file(harness.log.join("cargo")).unwrap();
+    fs::write(repository.join("untracked"), "dirty\n").unwrap();
+    let dirty = harness.run(&["kit", "install"]);
+    assert!(dirty.status.success(), "{}", stderr(&dirty));
+    assert!(harness.was_invoked("cargo"));
+    assert!(
+        !fs::read_to_string(harness.kit_file())
+            .unwrap()
+            .contains("installed ="),
+        "a dirty successful install must clear stale state"
+    );
+}
+
+#[test]
+fn remote_git_head_is_recorded_and_skipped_when_unchanged() {
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+    const BRANCH_COMMIT: &str = "89abcdef0123456789abcdef0123456789abcdef";
+    let harness = Harness::new(&["cargo", "git", "gh"]);
+    harness.write_config("[github.auth]\nauto_switch = [\"owner\"]\n");
+    let remote = format!("{COMMIT}\tHEAD\n");
+
+    let added = harness
+        .command(&["install", "-a", "--tool", "cargo", "owner/tool"])
+        .env("DTR_TEST_GIT_LS_REMOTE_OUTPUT", &remote)
+        .output()
+        .unwrap();
+    assert!(added.status.success(), "{}", stderr(&added));
+    let config = fs::read_to_string(harness.kit_file()).unwrap();
+    assert!(config.contains(COMMIT), "{}\n{config}", stderr(&added));
+
+    fs::remove_file(harness.log.join("cargo")).unwrap();
+    let cached = harness
+        .command(&["kit", "install"])
+        .env("DTR_TEST_GIT_LS_REMOTE_OUTPUT", &remote)
+        .output()
+        .unwrap();
+    assert!(cached.status.success(), "{}", stderr(&cached));
+    assert!(!harness.was_invoked("cargo"));
+    let probe = harness.invocation("git-ls-remote");
+    assert_eq!(
+        probe.args,
+        [
+            "ls-remote",
+            "--",
+            "https://github.com/owner/tool.git",
+            "HEAD"
+        ]
+    );
+    assert!(probe.git_auth_header_present);
+
+    let branched = fs::read_to_string(harness.kit_file()).unwrap().replace(
+        "tool = \"cargo\"\n",
+        "tool = \"cargo\"\nargs = [\"--branch\", \"next\"]\n",
+    );
+    fs::write(harness.kit_file(), branched).unwrap();
+    let branch_remote = format!("{BRANCH_COMMIT}\trefs/heads/next\n");
+    let changed = harness
+        .command(&["kit", "install"])
+        .env("DTR_TEST_GIT_LS_REMOTE_OUTPUT", &branch_remote)
+        .output()
+        .unwrap();
+    assert!(changed.status.success(), "{}", stderr(&changed));
+    assert_eq!(
+        harness.invocation("cargo").args.last().map(String::as_str),
+        Some("next")
+    );
+    assert!(
+        fs::read_to_string(harness.kit_file())
+            .unwrap()
+            .contains(BRANCH_COMMIT)
+    );
+
+    fs::remove_file(harness.log.join("cargo")).unwrap();
+    let explain = harness
+        .command(&["--explain", "kit", "install"])
+        .env("DTR_TEST_GIT_LS_REMOTE_OUTPUT", &branch_remote)
+        .output()
+        .unwrap();
+    assert!(explain.status.success(), "{}", stderr(&explain));
+    assert!(stdout(&explain).contains("skip:"), "{}", stdout(&explain));
+    assert!(!harness.was_invoked("cargo"));
+
+    let failed_probe = harness
+        .command(&["kit", "install"])
+        .env("DTR_TEST_GIT_LS_REMOTE_EXIT", "3")
+        .output()
+        .unwrap();
+    assert!(failed_probe.status.success(), "{}", stderr(&failed_probe));
+    assert!(harness.was_invoked("cargo"));
+    assert!(
+        stderr(&failed_probe).contains("git ls-remote could not inspect"),
+        "{}",
+        stderr(&failed_probe)
+    );
+    assert!(
+        !fs::read_to_string(harness.kit_file())
+            .unwrap()
+            .contains("installed =")
+    );
+}
+
+#[test]
+fn remote_go_git_origins_record_and_skip_the_resolved_module_commit() {
+    const COMMIT: &str = "fedcba9876543210fedcba9876543210fedcba98";
+    let harness = Harness::new(&["go"]);
+    let module = format!(r#"{{"Origin":{{"VCS":"git","Hash":"{COMMIT}"}}}}"#);
+    let added = harness
+        .command(&["install", "-a", "--tool", "go", "owner/tool@latest"])
+        .env("DTR_TEST_GO_MODULE_JSON", &module)
+        .output()
+        .unwrap();
+    assert!(added.status.success(), "{}", stderr(&added));
+    assert!(
+        fs::read_to_string(harness.kit_file())
+            .unwrap()
+            .contains(COMMIT)
+    );
+
+    fs::remove_file(harness.log.join("go")).unwrap();
+    let cached = harness
+        .command(&["kit", "install"])
+        .env("DTR_TEST_GO_MODULE_JSON", &module)
+        .output()
+        .unwrap();
+    assert!(cached.status.success(), "{}", stderr(&cached));
+    assert!(!harness.was_invoked("go"));
+    assert_eq!(
+        harness.invocation("go-module").args,
+        ["list", "-m", "-json", "github.com/owner/tool@latest"]
+    );
 }
 
 #[test]

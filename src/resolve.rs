@@ -5,7 +5,8 @@ use std::process::Command;
 use crate::cli::{InstallArgs, InstallTool};
 use crate::clone_args::{CloneRequest, NameMode};
 use crate::command::{
-    CommandPlan, GoInstallSource, PlanKind, SecretEnvironment, command_exists, npm_executable,
+    CommandPlan, GitReference, GoInstallSource, InstallRevision, PlanKind, SecretEnvironment,
+    command_exists, npm_executable,
 };
 use crate::config::Config;
 use crate::error::DtrError;
@@ -263,7 +264,7 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
             program: "go".into(),
             executable: "go".into(),
             args: ["install", "./..."].map(OsString::from).to_vec(),
-            current_dir: Some(directory),
+            current_dir: Some(directory.clone()),
             target_dir: None,
             preparations: Vec::new(),
             repospec,
@@ -271,6 +272,7 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
             auth: None,
             environment: Vec::new(),
             removed_environment: Vec::new(),
+            install_revision: Some(InstallRevision::LocalGit { path: directory }),
         });
     }
 
@@ -283,6 +285,11 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
     }
 
     let install_source = import_path.clone().into();
+    let install_revision = import_path
+        .contains('@')
+        .then(|| InstallRevision::GoModule {
+            query: OsString::from(import_path.clone()),
+        });
     Ok(CommandPlan {
         kind: PlanKind::GoInstall(GoInstallSource::Remote {
             import_path: install_source,
@@ -298,6 +305,7 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
         auth: None,
         environment: Vec::new(),
         removed_environment: Vec::new(),
+        install_revision,
     })
 }
 
@@ -322,14 +330,22 @@ fn plan_cargo_install(context: InstallContext) -> Result<CommandPlan, DtrError> 
     let mut auth = None;
     let mut environment = Vec::new();
     let mut removed_environment = Vec::new();
+    let install_revision;
 
     if let Some(path) = spec.local_path() {
         command_args.push("--path".into());
         command_args.push(path.as_os_str().to_os_string());
+        install_revision = Some(InstallRevision::LocalGit {
+            path: path.to_path_buf(),
+        });
     } else {
         let remote = spec.install_git_remote(github_owner.as_deref())?;
         command_args.push("--git".into());
-        command_args.push(remote);
+        command_args.push(remote.clone());
+        install_revision = Some(InstallRevision::RemoteGit {
+            remote,
+            reference: cargo_git_reference(&args.install_args),
+        });
 
         if let Some(selection) = github_selection.resolve(&spec)? {
             auth = Some(format!(
@@ -355,6 +371,7 @@ fn plan_cargo_install(context: InstallContext) -> Result<CommandPlan, DtrError> 
         auth,
         environment,
         removed_environment,
+        install_revision,
     })
 }
 
@@ -402,6 +419,16 @@ fn plan_python_install(
     require_command(backend.program(), backend.purpose())?;
 
     let repospec = spec.description();
+    let install_revision = if let Some(path) = spec.local_path() {
+        Some(InstallRevision::LocalGit {
+            path: path.to_path_buf(),
+        })
+    } else {
+        Some(InstallRevision::RemoteGit {
+            remote: spec.install_git_remote(github_owner.as_deref())?,
+            reference: GitReference::Head,
+        })
+    };
     let source = spec.python_package_source(github_owner.as_deref())?;
     let mut auth = None;
     let mut environment = Vec::new();
@@ -449,6 +476,7 @@ fn plan_python_install(
         auth,
         environment,
         removed_environment,
+        install_revision,
     })
 }
 
@@ -473,6 +501,16 @@ fn plan_npm_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
     })?;
 
     let repospec = spec.description();
+    let install_revision = if let Some(path) = spec.local_path() {
+        Some(InstallRevision::LocalGit {
+            path: path.to_path_buf(),
+        })
+    } else {
+        Some(InstallRevision::RemoteGit {
+            remote: spec.install_git_remote(github_owner.as_deref())?,
+            reference: GitReference::Head,
+        })
+    };
     let source = spec.npm_package_source(github_owner.as_deref())?;
     let mut auth = None;
     let mut environment = Vec::new();
@@ -503,7 +541,44 @@ fn plan_npm_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
         auth,
         environment,
         removed_environment,
+        install_revision,
     })
+}
+
+fn cargo_git_reference(arguments: &[OsString]) -> GitReference {
+    let mut selected = None;
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        let Some(argument) = argument.to_str() else {
+            continue;
+        };
+        let selector = if let Some(value) = argument.strip_prefix("--branch=") {
+            Some(GitReference::Branch(value.into()))
+        } else if let Some(value) = argument.strip_prefix("--tag=") {
+            Some(GitReference::Tag(value.into()))
+        } else if let Some(value) = argument.strip_prefix("--rev=") {
+            Some(GitReference::Revision(value.into()))
+        } else if matches!(argument, "--branch" | "--tag" | "--rev") {
+            let Some(value) = arguments.next() else {
+                return GitReference::Unsupported;
+            };
+            Some(match argument {
+                "--branch" => GitReference::Branch(value.clone()),
+                "--tag" => GitReference::Tag(value.clone()),
+                "--rev" => GitReference::Revision(value.clone()),
+                _ => unreachable!(),
+            })
+        } else {
+            None
+        };
+        if let Some(selector) = selector {
+            if selected.is_some() {
+                return GitReference::Unsupported;
+            }
+            selected = Some(selector);
+        }
+    }
+    selected.unwrap_or(GitReference::Head)
 }
 
 fn validate_pipx_arguments(arguments: &[OsString]) -> Result<(), DtrError> {
@@ -651,6 +726,7 @@ fn forge_clone_plan(
         auth,
         environment,
         removed_environment,
+        install_revision: None,
     }
 }
 
@@ -684,6 +760,7 @@ fn git_clone_plan(
         auth: None,
         environment: Vec::new(),
         removed_environment: Vec::new(),
+        install_revision: None,
     }
 }
 
@@ -822,6 +899,27 @@ mod tests {
                 ["--locked", "--bin", "tool"].map(OsString::from).as_ref()
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn cargo_git_references_cover_head_branch_tag_and_revision_forms() {
+        assert_eq!(cargo_git_reference(&[]), GitReference::Head);
+        assert_eq!(
+            cargo_git_reference(&["--branch=next".into()]),
+            GitReference::Branch("next".into())
+        );
+        assert_eq!(
+            cargo_git_reference(&["--tag".into(), "v1.2.3".into()]),
+            GitReference::Tag("v1.2.3".into())
+        );
+        assert_eq!(
+            cargo_git_reference(&["--rev".into(), "deadbeef".into()]),
+            GitReference::Revision("deadbeef".into())
+        );
+        assert_eq!(
+            cargo_git_reference(&["--branch=one".into(), "--tag=two".into()]),
+            GitReference::Unsupported
         );
     }
 
