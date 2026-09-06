@@ -512,7 +512,7 @@ ripgrep with PCRE2 enabled:
 repospec = "~/p/my/dtr"
 tool = "cargo"
 args = ["--force"]
-installed = { commit = "0123456789abcdef0123456789abcdef01234567", request = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+installed = { commit = "0123456789abcdef0123456789abcdef01234567", branch = "main", request = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
 
 [[install]]
 repospec = "~/p/my/ripgrep"
@@ -521,10 +521,14 @@ args = ["--force", "--features", "pcre2"]
 ```
 
 `installed` is generated state. Its `commit` is the exact Git object installed;
-`request` covers the repository, tool, Go-version behavior, native arguments,
-and relevant dtr-managed installer options. Editing any of those inputs causes
-the next kit run to install again and replace the state. Removing `installed`
-also forces that entry's next normal installation.
+`branch` records the active branch name (if not in a detached HEAD state) for
+informational purposes; `dirty = true` indicates that uncommitted changes were
+present at install time and prevents future kit install runs from skipping
+rebuilds until installed from a clean worktree; `request` covers the repository,
+tool, Go-version behavior, native arguments, and relevant dtr-managed installer
+options. Editing any of those inputs causes the next kit run to install again
+and replace the state. Removing `installed` also forces that entry's next normal
+installation.
 
 Malformed or missing configuration is a fatal error. Once the file has been
 loaded, an entry that cannot be planned, started, or completed emits a warning;

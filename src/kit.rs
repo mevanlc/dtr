@@ -51,7 +51,18 @@ struct InstallEntry {
 #[serde(deny_unknown_fields)]
 struct InstalledState {
     commit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    branch: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    dirty: bool,
     request: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProbedRevision {
+    commit: String,
+    branch: Option<String>,
+    dirty: bool,
 }
 
 struct LoadedConfig {
@@ -65,7 +76,7 @@ struct InstallJob {
     plan: CommandPlan,
     entry: InstallEntry,
     request: String,
-    before_revision: Option<String>,
+    before_revision: Option<ProbedRevision>,
 }
 
 struct InstallJobResult {
@@ -292,10 +303,13 @@ pub(crate) fn run(
             }
         };
         let cached = !force
-            && before_revision.as_ref().is_some_and(|commit| {
-                entry.installed.as_ref().is_some_and(|installed| {
-                    installed.commit == *commit && installed.request == request
-                })
+            && before_revision.as_ref().is_some_and(|probed| {
+                !probed.dirty
+                    && entry.installed.as_ref().is_some_and(|installed| {
+                        !installed.dirty
+                            && installed.commit == probed.commit
+                            && installed.request == request
+                    })
             });
 
         if explain {
@@ -304,7 +318,7 @@ pub(crate) fn run(
             if cached {
                 println!(
                     "skip:     {} is already installed",
-                    short_revision(before_revision.as_deref().expect("cached revision"))
+                    short_revision(&before_revision.as_ref().expect("cached revision").commit)
                 );
             } else {
                 plan.explain();
@@ -316,7 +330,7 @@ pub(crate) fn run(
             let message = format!(
                 "up to date: {} @ {} (skipped)",
                 repospec,
-                short_revision(before_revision.as_deref().expect("cached revision"))
+                short_revision(&before_revision.as_ref().expect("cached revision").commit)
             );
             let messages = if narration {
                 vec![DtrMessage::Stderr(message)]
@@ -859,7 +873,7 @@ fn fingerprint_component(digest: &mut Sha256, bytes: &[u8]) {
     digest.update(bytes);
 }
 
-fn probe_install_revision(plan: &CommandPlan) -> Result<Option<String>, String> {
+fn probe_install_revision(plan: &CommandPlan) -> Result<Option<ProbedRevision>, String> {
     match plan.install_revision.as_ref() {
         Some(InstallRevision::LocalGit { path }) => probe_local_revision(path),
         Some(InstallRevision::RemoteGit { remote, reference }) => {
@@ -870,7 +884,7 @@ fn probe_install_revision(plan: &CommandPlan) -> Result<Option<String>, String> 
     }
 }
 
-fn probe_local_revision(path: &Path) -> Result<Option<String>, String> {
+fn probe_local_revision(path: &Path) -> Result<Option<ProbedRevision>, String> {
     if !path
         .ancestors()
         .any(|ancestor| ancestor.join(".git").exists())
@@ -888,6 +902,26 @@ fn probe_local_revision(path: &Path) -> Result<Option<String>, String> {
     }
     let commit = parse_single_object_id(&output.stdout)
         .ok_or_else(|| "git rev-parse did not return one full object ID".to_owned())?;
+
+    let branch_output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["symbolic-ref", "--short", "-q", "HEAD"])
+        .output()
+        .map_err(|error| format!("could not start git for branch inspection: {error}"))?;
+    let branch = if branch_output.status.success() {
+        let text = std::str::from_utf8(&branch_output.stdout)
+            .map_err(|_| "git symbolic-ref returned non-UTF-8 branch name".to_owned())?
+            .trim();
+        if text.is_empty() {
+            None
+        } else {
+            Some(text.to_owned())
+        }
+    } else {
+        None
+    };
+
     let status = Command::new("git")
         .arg("-C")
         .arg(path)
@@ -902,25 +936,30 @@ fn probe_local_revision(path: &Path) -> Result<Option<String>, String> {
     if !status.status.success() {
         return Err("git status could not inspect the local worktree".to_owned());
     }
-    if status.stdout.is_empty() {
-        Ok(Some(commit))
-    } else {
-        Ok(None)
-    }
+    let dirty = !status.stdout.is_empty();
+    Ok(Some(ProbedRevision {
+        commit,
+        branch,
+        dirty,
+    }))
 }
 
 fn probe_remote_revision(
     plan: &CommandPlan,
     remote: &std::ffi::OsStr,
     reference: &GitReference,
-) -> Result<Option<String>, String> {
+) -> Result<Option<ProbedRevision>, String> {
     if *reference == GitReference::Unsupported {
         return Ok(None);
     }
     if let GitReference::Revision(revision) = reference
         && revision.to_str().is_some_and(is_full_object_id)
     {
-        return Ok(Some(revision.to_string_lossy().to_ascii_lowercase()));
+        return Ok(Some(ProbedRevision {
+            commit: revision.to_string_lossy().to_ascii_lowercase(),
+            branch: None,
+            dirty: false,
+        }));
     }
 
     let patterns = match reference {
@@ -948,7 +987,18 @@ fn probe_remote_revision(
     if !output.status.success() {
         return Err("git ls-remote could not inspect the selected remote revision".to_owned());
     }
-    resolve_ls_remote_output(&output.stdout, reference)
+    let commit = resolve_ls_remote_output(&output.stdout, reference)?;
+    Ok(commit.map(|commit| {
+        let branch = match reference {
+            GitReference::Branch(branch) => Some(branch.to_string_lossy().into_owned()),
+            _ => None,
+        };
+        ProbedRevision {
+            commit,
+            branch,
+            dirty: false,
+        }
+    }))
 }
 
 fn resolve_ls_remote_output(
@@ -1014,7 +1064,7 @@ struct GoModuleOrigin {
 fn probe_go_module_revision(
     plan: &CommandPlan,
     query: &std::ffi::OsStr,
-) -> Result<Option<String>, String> {
+) -> Result<Option<ProbedRevision>, String> {
     let mut command = Command::new(&plan.executable);
     command.args([
         std::ffi::OsStr::new("list"),
@@ -1040,7 +1090,11 @@ fn probe_go_module_revision(
     Ok(origin
         .hash
         .filter(|hash| is_full_object_id(hash))
-        .map(|hash| hash.to_ascii_lowercase()))
+        .map(|hash| ProbedRevision {
+            commit: hash.to_ascii_lowercase(),
+            branch: None,
+            dirty: false,
+        }))
 }
 
 fn parse_single_object_id(bytes: &[u8]) -> Option<String> {
@@ -1054,14 +1108,16 @@ fn is_full_object_id(value: &str) -> bool {
 
 fn successful_install_state(
     plan: &CommandPlan,
-    before_revision: Option<String>,
+    before_revision: Option<ProbedRevision>,
     request: String,
     mut warn: impl FnMut(String),
 ) -> Option<InstalledState> {
     let before_revision = before_revision?;
     match probe_install_revision(plan) {
         Ok(Some(after_revision)) if after_revision == before_revision => Some(InstalledState {
-            commit: after_revision,
+            commit: after_revision.commit,
+            branch: after_revision.branch,
+            dirty: after_revision.dirty,
             request,
         }),
         Ok(Some(_)) => {
@@ -1216,6 +1272,12 @@ fn replace_entry(text: String, index: usize, entry: &InstallEntry) -> Result<Str
 fn installed_value(installed: &InstalledState) -> Value {
     let mut table = InlineTable::new();
     table.insert("commit", Value::from(installed.commit.as_str()));
+    if let Some(branch) = &installed.branch {
+        table.insert("branch", Value::from(branch.as_str()));
+    }
+    if installed.dirty {
+        table.insert("dirty", Value::from(true));
+    }
     table.insert("request", Value::from(installed.request.as_str()));
     Value::InlineTable(table)
 }
@@ -1377,18 +1439,67 @@ mod tests {
             args: Vec::new(),
             installed: Some(InstalledState {
                 commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+                branch: Some("main".to_owned()),
+                dirty: true,
                 request: format!("sha256:{}", "a".repeat(64)),
             }),
         };
         let text = append_entry(String::new(), &entry).unwrap();
         assert!(
             text.contains(
-                "installed = { commit = \"0123456789abcdef0123456789abcdef01234567\", request = \"sha256:"
+                "installed = { commit = \"0123456789abcdef0123456789abcdef01234567\", branch = \"main\", dirty = true, request = \"sha256:"
             ),
             "{text}"
         );
         let parsed: KitConfig = toml::from_str(&text).unwrap();
         assert_eq!(parsed.install[0], entry);
+
+        let clean_entry = InstallEntry {
+            repospec: "owner/tool".to_owned(),
+            tool: InstallTool::Cargo,
+            no_latest: false,
+            args: Vec::new(),
+            installed: Some(InstalledState {
+                commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+                branch: Some("feature/foo".to_owned()),
+                dirty: false,
+                request: format!("sha256:{}", "a".repeat(64)),
+            }),
+        };
+        let clean_text = append_entry(String::new(), &clean_entry).unwrap();
+        assert!(
+            clean_text.contains(
+                "installed = { commit = \"0123456789abcdef0123456789abcdef01234567\", branch = \"feature/foo\", request = \"sha256:"
+            ),
+            "{clean_text}"
+        );
+        assert!(!clean_text.contains("dirty"), "{clean_text}");
+        let clean_parsed: KitConfig = toml::from_str(&clean_text).unwrap();
+        assert_eq!(clean_parsed.install[0], clean_entry);
+
+        let detached_entry = InstallEntry {
+            repospec: "owner/tool".to_owned(),
+            tool: InstallTool::Cargo,
+            no_latest: false,
+            args: Vec::new(),
+            installed: Some(InstalledState {
+                commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+                branch: None,
+                dirty: false,
+                request: format!("sha256:{}", "a".repeat(64)),
+            }),
+        };
+        let detached_text = append_entry(String::new(), &detached_entry).unwrap();
+        assert!(
+            detached_text.contains(
+                "installed = { commit = \"0123456789abcdef0123456789abcdef01234567\", request = \"sha256:"
+            ),
+            "{detached_text}"
+        );
+        assert!(!detached_text.contains("branch"), "{detached_text}");
+        assert!(!detached_text.contains("dirty"), "{detached_text}");
+        let detached_parsed: KitConfig = toml::from_str(&detached_text).unwrap();
+        assert_eq!(detached_parsed.install[0], detached_entry);
     }
 
     #[test]

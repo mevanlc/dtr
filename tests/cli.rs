@@ -967,6 +967,8 @@ fn local_git_installs_record_clean_commits_skip_and_force() {
         config.contains(&format!("commit = \"{commit}\"")),
         "{config}"
     );
+    assert!(config.contains("branch = "), "{config}");
+    assert!(!config.contains("dirty"), "{config}");
     assert!(config.contains("request = \"sha256:"), "{config}");
 
     fs::remove_file(harness.log.join("cargo")).unwrap();
@@ -1001,17 +1003,136 @@ fn local_git_installs_record_clean_commits_skip_and_force() {
     assert!(forced.status.success(), "{}", stderr(&forced));
     assert!(harness.was_invoked("cargo"));
 
+    // Install while worktree is dirty records dirty = true
     fs::remove_file(harness.log.join("cargo")).unwrap();
     fs::write(repository.join("untracked"), "dirty\n").unwrap();
     let dirty = harness.run(&["kit", "install"]);
     assert!(dirty.status.success(), "{}", stderr(&dirty));
     assert!(harness.was_invoked("cargo"));
+    let config = fs::read_to_string(harness.kit_file()).unwrap();
     assert!(
-        !fs::read_to_string(harness.kit_file())
-            .unwrap()
-            .contains("installed ="),
-        "a dirty successful install must clear stale state"
+        config.contains("dirty = true"),
+        "a dirty install must record dirty = true in installed state: {config}"
     );
+    assert!(
+        config.contains(&format!("commit = \"{commit}\"")),
+        "{config}"
+    );
+
+    // Subsequent install on dirty worktree must not skip
+    fs::remove_file(harness.log.join("cargo")).unwrap();
+    let dirty_again = harness.run(&["kit", "install"]);
+    assert!(dirty_again.status.success(), "{}", stderr(&dirty_again));
+    assert!(
+        harness.was_invoked("cargo"),
+        "subsequent install on dirty worktree must rebuild"
+    );
+
+    // Clean the worktree and reinstall: dirty = true should be removed
+    fs::remove_file(repository.join("untracked")).unwrap();
+    fs::remove_file(harness.log.join("cargo")).unwrap();
+    let clean_reinstall = harness.run(&["kit", "install"]);
+    assert!(
+        clean_reinstall.status.success(),
+        "{}",
+        stderr(&clean_reinstall)
+    );
+    assert!(
+        harness.was_invoked("cargo"),
+        "reinstall after dirty state must run installer"
+    );
+    let config = fs::read_to_string(harness.kit_file()).unwrap();
+    assert!(
+        !config.contains("dirty"),
+        "a clean successful install must clear dirty = true: {config}"
+    );
+    assert!(
+        config.contains(&format!("commit = \"{commit}\"")),
+        "{config}"
+    );
+
+    // Subsequent install on clean worktree skips
+    fs::remove_file(harness.log.join("cargo")).unwrap();
+    let clean_cached = harness.run(&["kit", "install"]);
+    assert!(clean_cached.status.success(), "{}", stderr(&clean_cached));
+    assert!(!harness.was_invoked("cargo"));
+    assert_eq!(
+        stderr(&clean_cached).matches("up to date:").count(),
+        1,
+        "{}",
+        stderr(&clean_cached)
+    );
+
+    // Switching branches at same commit without modifications still skips
+    let checkout = Command::new("git")
+        .arg("-C")
+        .arg(&repository)
+        .args(["checkout", "-q", "-b", "feature-branch"])
+        .output()
+        .unwrap();
+    assert!(checkout.status.success());
+    let branch_switched = harness.run(&["kit", "install"]);
+    assert!(
+        branch_switched.status.success(),
+        "{}",
+        stderr(&branch_switched)
+    );
+    assert!(
+        !harness.was_invoked("cargo"),
+        "branch change at same clean commit must still skip"
+    );
+    assert_eq!(
+        stderr(&branch_switched).matches("up to date:").count(),
+        1,
+        "{}",
+        stderr(&branch_switched)
+    );
+
+    // Detached HEAD at same clean commit still skips
+    let detach = Command::new("git")
+        .arg("-C")
+        .arg(&repository)
+        .args(["checkout", "-q", "--detach", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(detach.status.success());
+    let detached = harness.run(&["kit", "install"]);
+    assert!(detached.status.success(), "{}", stderr(&detached));
+    assert!(
+        !harness.was_invoked("cargo"),
+        "detached HEAD at same clean commit must still skip"
+    );
+    assert_eq!(
+        stderr(&detached).matches("up to date:").count(),
+        1,
+        "{}",
+        stderr(&detached)
+    );
+}
+
+#[test]
+fn dirty_local_git_install_and_add_records_dirty_flag() {
+    let harness = Harness::new(&["cargo"]);
+    harness.expose_real_program("git");
+    let repospec = harness.local_repository("dirty-tool", &["Cargo.toml"], &[]);
+    let repository = harness.work.join("dirty-tool");
+    let commit = initialize_git_repository(&repository);
+
+    // Create untracked file before installing & adding
+    fs::write(repository.join("untracked.txt"), "dirty worktree\n").unwrap();
+
+    let added = harness.run(&["install", "--add", "--tool", "cargo", &repospec]);
+    assert!(added.status.success(), "{}", stderr(&added));
+    assert!(harness.was_invoked("cargo"));
+
+    let config = fs::read_to_string(harness.kit_file()).unwrap();
+    assert!(
+        config.contains(&format!("commit = \"{commit}\"")),
+        "{config}"
+    );
+    assert!(config.contains("dirty = true"), "{config}");
+    assert!(config.contains("branch = "), "{config}");
+    assert!(config.contains("request = \"sha256:"), "{config}");
 }
 
 #[test]
