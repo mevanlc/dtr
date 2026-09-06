@@ -764,7 +764,7 @@ pub(crate) fn editor_command() -> Result<(OsString, Vec<OsString>), DtrError> {
                 "{variable} must be valid UTF-8 to parse editor arguments"
             ))
         })?;
-        let words = shlex::split(text).ok_or_else(|| {
+        let words = split_editor_command(text).ok_or_else(|| {
             DtrError::new(format!("could not parse {variable} as an editor command"))
         })?;
         if words.is_empty() {
@@ -782,6 +782,80 @@ pub(crate) fn editor_command() -> Result<(OsString, Vec<OsString>), DtrError> {
     Err(DtrError::new(
         "could not find an editor; set DTR_EDITOR, VISUAL, or EDITOR, or install vim or vi",
     ))
+}
+
+#[cfg(not(windows))]
+fn split_editor_command(command: &str) -> Option<Vec<String>> {
+    shlex::split(command)
+}
+
+#[cfg(windows)]
+fn split_editor_command(command: &str) -> Option<Vec<String>> {
+    parse_windows_command(command)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn parse_windows_command(command: &str) -> Option<Vec<String>> {
+    let chars: Vec<char> = command.chars().collect();
+    let mut words = Vec::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        while i < chars.len() && (chars[i] == ' ' || chars[i] == '\t') {
+            i += 1;
+        }
+        if i >= chars.len() {
+            break;
+        }
+
+        let mut current_word = String::new();
+        let mut in_quotes = false;
+
+        while i < chars.len() {
+            if !in_quotes && (chars[i] == ' ' || chars[i] == '\t') {
+                break;
+            }
+
+            if chars[i] == '\\' {
+                let mut num_slashes = 0;
+                while i < chars.len() && chars[i] == '\\' {
+                    num_slashes += 1;
+                    i += 1;
+                }
+
+                if i < chars.len() && chars[i] == '"' {
+                    for _ in 0..(num_slashes / 2) {
+                        current_word.push('\\');
+                    }
+                    if num_slashes % 2 == 1 {
+                        current_word.push('"');
+                        i += 1;
+                    } else {
+                        in_quotes = !in_quotes;
+                        i += 1;
+                    }
+                } else {
+                    for _ in 0..num_slashes {
+                        current_word.push('\\');
+                    }
+                }
+            } else if chars[i] == '"' {
+                in_quotes = !in_quotes;
+                i += 1;
+            } else {
+                current_word.push(chars[i]);
+                i += 1;
+            }
+        }
+
+        if in_quotes {
+            return None;
+        }
+
+        words.push(current_word);
+    }
+
+    Some(words)
 }
 
 #[cfg(test)]
@@ -915,6 +989,45 @@ mod tests {
             remote_go_binary_name(OsStr::new("example.com/owner/vault")),
             Some("vault")
         );
+    }
+
+    #[test]
+    fn windows_editor_command_parsing_preserves_backslashes_and_quotes() {
+        assert_eq!(
+            parse_windows_command(r"c:\bin\vim.exe"),
+            Some(vec!["c:\\bin\\vim.exe".to_owned()])
+        );
+        assert_eq!(
+            parse_windows_command(r"c:\bin\vim.exe --wait"),
+            Some(vec!["c:\\bin\\vim.exe".to_owned(), "--wait".to_owned()])
+        );
+        assert_eq!(
+            parse_windows_command(r#""c:\Program Files\vim\vim.exe" --wait"#),
+            Some(vec![
+                "c:\\Program Files\\vim\\vim.exe".to_owned(),
+                "--wait".to_owned()
+            ])
+        );
+        assert_eq!(
+            parse_windows_command(r#"notepad.exe "C:\my files\doc.txt""#),
+            Some(vec![
+                "notepad.exe".to_owned(),
+                "C:\\my files\\doc.txt".to_owned()
+            ])
+        );
+        assert_eq!(
+            parse_windows_command(r#"dtr-editor "arg with \"quotes\"""#),
+            Some(vec![
+                "dtr-editor".to_owned(),
+                "arg with \"quotes\"".to_owned()
+            ])
+        );
+        assert_eq!(
+            parse_windows_command(r#"dtr-editor "C:\path\\""#),
+            Some(vec!["dtr-editor".to_owned(), "C:\\path\\".to_owned()])
+        );
+        assert_eq!(parse_windows_command(r#""c:\bin\vim.exe"#), None);
+        assert_eq!(parse_windows_command("   "), Some(Vec::new()));
     }
 
     #[cfg(unix)]

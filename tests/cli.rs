@@ -484,6 +484,7 @@ fn initialize_git_repository(path: &Path) -> String {
         "commit",
         "-qm",
         "initial",
+        "--no-verify",
     ]);
     let output = Command::new("git")
         .arg("-C")
