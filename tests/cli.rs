@@ -1136,6 +1136,30 @@ fn dirty_local_git_install_and_add_records_dirty_flag() {
 }
 
 #[test]
+fn dtr_self_install_records_tracking_state_under_reexec() {
+    let harness = Harness::new(&["cargo"]);
+    harness.expose_real_program("git");
+    let repospec = harness.local_repository("dtr", &["Cargo.toml"], &[]);
+    let repository = harness.work.join("dtr");
+    let commit = initialize_git_repository(&repository);
+
+    let installed = harness
+        .command(&["install", "--add", "--tool", "cargo", &repospec])
+        .env("DTR_SELF_REEXEC", "1")
+        .output()
+        .unwrap();
+    assert!(installed.status.success(), "{}", stderr(&installed));
+    assert!(harness.was_invoked("cargo"));
+
+    let config = fs::read_to_string(harness.kit_file()).unwrap();
+    assert!(
+        config.contains(&format!("commit = \"{commit}\"")),
+        "{config}"
+    );
+    assert!(!config.contains("dirty"), "{config}");
+}
+
+#[test]
 fn remote_git_head_is_recorded_and_skipped_when_unchanged() {
     const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
     const BRANCH_COMMIT: &str = "89abcdef0123456789abcdef0123456789abcdef";

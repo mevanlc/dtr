@@ -21,6 +21,7 @@ use crate::config::{self, Config};
 use crate::error::DtrError;
 use crate::repospec::{InstallSource, RepositoryIdentity};
 use crate::resolve::plan_install;
+use crate::self_rebuild;
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,31 +32,31 @@ struct KitConfig {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct InstallEntry {
-    repospec: String,
+pub(crate) struct InstallEntry {
+    pub(crate) repospec: String,
 
     #[serde(default, skip_serializing_if = "install_tool_is_auto")]
-    tool: InstallTool,
+    pub(crate) tool: InstallTool,
 
     #[serde(default, skip_serializing_if = "is_false")]
-    no_latest: bool,
+    pub(crate) no_latest: bool,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    args: Vec<String>,
+    pub(crate) args: Vec<String>,
 
     #[serde(default, skip_serializing)]
-    installed: Option<InstalledState>,
+    pub(crate) installed: Option<InstalledState>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-struct InstalledState {
-    commit: String,
+pub(crate) struct InstalledState {
+    pub(crate) commit: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    branch: Option<String>,
+    pub(crate) branch: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
-    dirty: bool,
-    request: String,
+    pub(crate) dirty: bool,
+    pub(crate) request: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -112,7 +113,7 @@ impl InstallEntry {
         })
     }
 
-    fn from_install_args(
+    pub(crate) fn from_install_args(
         args: &InstallArgs,
         home: Option<&Path>,
     ) -> Result<(Self, Option<PathBuf>), DtrError> {
@@ -357,6 +358,15 @@ pub(crate) fn run(
     }
 
     if !explain {
+        if let Some(self_job) = jobs
+            .iter()
+            .find(|job| self_rebuild::is_self_install_entry(&job.entry))
+            && let Some(package_root) = self_rebuild::resolve_local_package_root(&self_job.repospec)
+        {
+            let target_binary = self_rebuild::build_dtr_release(&package_root)?;
+            return self_rebuild::trampoline_execute(&target_binary);
+        }
+
         let execution = execute_jobs(
             jobs,
             job_count,
@@ -443,6 +453,13 @@ pub(crate) fn run_install_and_add(
         plan.explain();
         println!("track:    {}", display_path(&path));
         return Ok(0);
+    }
+
+    if self_rebuild::is_self_install_entry(&entry)
+        && let Some(package_root) = self_rebuild::resolve_local_package_root(&entry.repospec)
+    {
+        let target_binary = self_rebuild::build_dtr_release(&package_root)?;
+        return self_rebuild::trampoline_execute(&target_binary);
     }
 
     let runtime_config = if narration_override.is_none()

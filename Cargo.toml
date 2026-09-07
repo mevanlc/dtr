@@ -19,3 +19,9 @@ tempfile = "3"
 toml = "1"
 toml_edit = "0.25"
 url = "2.5.8"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
