@@ -41,6 +41,9 @@ pub(crate) struct InstallEntry {
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) no_latest: bool,
 
+    #[serde(default, skip_serializing_if = "is_false")]
+    main: bool,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) args: Vec<String>,
 
@@ -108,6 +111,7 @@ impl InstallEntry {
             add: false,
             tool: self.tool,
             no_latest: self.no_latest,
+            main: self.main,
             repospec: expand_home(self.repospec, home)?,
             install_args: self.args.into_iter().map(OsString::from).collect(),
         })
@@ -156,6 +160,7 @@ impl InstallEntry {
                 repospec,
                 tool: args.tool,
                 no_latest: args.no_latest,
+                main: args.main,
                 args: install_args,
                 installed: None,
             },
@@ -818,6 +823,9 @@ fn render_install_command(entry: &InstallEntry, home: Option<&Path>) -> Result<S
     if entry.no_latest {
         arguments.push("--no-latest".into());
     }
+    if entry.main {
+        arguments.push("--main".into());
+    }
     arguments.push(expand_home(entry.repospec.clone(), home)?);
     if !entry.args.is_empty() {
         arguments.push("--".into());
@@ -847,6 +855,7 @@ fn same_install_request(left: &InstallEntry, right: &InstallEntry) -> bool {
     left.repospec == right.repospec
         && left.tool == right.tool
         && left.no_latest == right.no_latest
+        && left.main == right.main
         && left.args == right.args
 }
 
@@ -859,6 +868,10 @@ fn request_fingerprint(entry: &InstallEntry, config: &Config) -> String {
     fingerprint_component(&mut digest, entry.tool.to_string().as_bytes());
     fingerprint_component(&mut digest, b"no_latest");
     fingerprint_component(&mut digest, &[u8::from(entry.no_latest)]);
+    if entry.main {
+        fingerprint_component(&mut digest, b"main");
+        fingerprint_component(&mut digest, &[1]);
+    }
     fingerprint_component(&mut digest, b"args");
     fingerprint_component(
         &mut digest,
@@ -1272,6 +1285,7 @@ fn replace_entry(text: String, index: usize, entry: &InstallEntry) -> Result<Str
         "no_latest",
         entry.no_latest.then(|| Value::from(true)),
     );
+    set_optional_table_value(table, "main", entry.main.then(|| Value::from(true)));
     set_optional_table_value(
         table,
         "args",
@@ -1438,6 +1452,7 @@ mod tests {
             repospec: "~/p/my/tool".to_owned(),
             tool: InstallTool::Auto,
             no_latest: false,
+            main: false,
             args: Vec::new(),
             installed: None,
         };
@@ -1453,6 +1468,7 @@ mod tests {
             repospec: "owner/tool".to_owned(),
             tool: InstallTool::Cargo,
             no_latest: false,
+            main: false,
             args: Vec::new(),
             installed: Some(InstalledState {
                 commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
@@ -1475,6 +1491,7 @@ mod tests {
             repospec: "owner/tool".to_owned(),
             tool: InstallTool::Cargo,
             no_latest: false,
+            main: false,
             args: Vec::new(),
             installed: Some(InstalledState {
                 commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
@@ -1498,6 +1515,7 @@ mod tests {
             repospec: "owner/tool".to_owned(),
             tool: InstallTool::Cargo,
             no_latest: false,
+            main: false,
             args: Vec::new(),
             installed: Some(InstalledState {
                 commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
@@ -1574,6 +1592,7 @@ mod tests {
             repospec: "~/p/my/tool with spaces".to_owned(),
             tool: InstallTool::Cargo,
             no_latest: false,
+            main: false,
             args: vec!["--features".to_owned(), "pcre2".to_owned()],
             installed: None,
         };
@@ -1602,6 +1621,7 @@ mod tests {
             repospec: tracked_local_path(repository, Some(home)).unwrap(),
             tool: InstallTool::Cargo,
             no_latest: false,
+            main: false,
             args: Vec::new(),
             installed: None,
         };

@@ -1,6 +1,8 @@
 # dtr automatic install tool selection plan
 
-Status: implemented and validated on macOS (2026-07-23; kit follow-up 2026-08-11)
+Status: implemented and validated on macOS (2026-07-23; kit follow-up
+2026-08-11); local Go `--main` follow-up validated on Android Termux
+(2026-09-07)
 
 Roadmap: completed post-[first MVP](FIRST-MVP.md) increment
 
@@ -15,8 +17,8 @@ interface or roadmap status this increment superseded.
 Repository installation now uses one tool-valued option:
 
 ```text
-dtr [--explain|-n] install|i [-a|--add] [-t|--tool <tool>] [<dtr-repospec>]
-dtr [--explain|-n] install|i [-a|--add] [-t|--tool <tool>] [<dtr-repospec>] -- <installer-arg>...
+dtr [--explain|-n] install|i [-a|--add] [-t|--tool <tool>] [--main] [<dtr-repospec>]
+dtr [--explain|-n] install|i [-a|--add] [-t|--tool <tool>] [--main] [<dtr-repospec>] -- <installer-arg>...
 ```
 
 The supported values are `go`, `cargo`, `uv`, `pipx`, `npm`, and `auto`.
@@ -87,6 +89,15 @@ as `owner/repo@v1.2.3` or
 `https://github.com/owner/repo@feature-branch`. Dtr separates the query from the
 base `RepoSpec`; clone parsing and explicit local paths retain their existing
 meaning.
+
+Local Go installs accept the dtr-level `--main` intent. Dtr uses `go list -find`
+metadata to prefer a root `package main`; when the root is not a command, it
+accepts exactly one main package below the repository. Zero or multiple
+candidates fail before installation, with ambiguous candidates listed. The
+option is rejected after tool resolution for non-Go backends and is also rejected
+for remote Go sources. Tracked requests persist it as `main = true`, and it forms
+part of the install-request fingerprint without invalidating fingerprints for
+entries that retain the default `main = false` behavior.
 
 ## Conservative automatic selection
 
@@ -214,8 +225,16 @@ remain byte-safe where the underlying platform permits non-UTF-8 paths.
 18. [x] Add visible `k`, `k i`, and `k ls` aliases for the kit command hierarchy.
 19. [x] Add `kit add|a`, installing by default with an opt-out `--no-install`.
 20. [x] Cache successful stable Git revisions and skip matching kit installs by default.
+21. [x] Add fail-closed primary-command selection for local Go installs with `--main`.
 
 ## Validation record
+
+The local Go `--main` follow-up was validated on Android Termux on 2026-09-07:
+
+- `just check` passed formatting, warnings-as-errors Clippy, all 233 nextest
+  tests, locked `cargo check`, `actionlint`, and diff validation.
+- A live explain against the sibling lazygit checkout selected its root main
+  package and produced `go install .`.
 
 The kit-alias follow-up was validated on macOS on 2026-08-12:
 
@@ -247,7 +266,8 @@ this local record until that workflow runs successfully.
 
 ## Remaining boundaries
 
-- Automatic package, binary, workspace, or subdirectory selection in monorepos.
+- ※ Automatic package, binary, workspace, or subdirectory selection remains
+  unsupported except for the bounded local Go `--main` selection.
 - Go module paths that differ from their repository path.
 - Literal `scp://` and `sftp://` staging workflows.
 - Configurable shorthand forge, host, source, protocol, or account defaults.

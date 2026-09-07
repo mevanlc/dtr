@@ -110,7 +110,8 @@ release actions and were not performed by this roadmap closure.
 
 - [Automatic install tool selection](PLAN-AUTO-INSTALL.md), including the
   unified `--tool` option, conservative root-manifest inference, Python backend
-  selection, forge API inspection, and filtered Git fallback.
+  selection, forge API inspection, filtered Git fallback, and fail-closed local
+  Go primary-command selection with `--main`.
 - `gcl` clone-compatibility follow-up: repository-root fragment stripping,
   `-U` / `--upstream-remote-name`, and forge-aware GitHub SSH references.
 - GitHub browser URL normalization: well-known paths after `owner/repo` and

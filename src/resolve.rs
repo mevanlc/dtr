@@ -1,12 +1,14 @@
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use serde::Deserialize;
 
 use crate::cli::{InstallArgs, InstallTool};
 use crate::clone_args::{CloneRequest, NameMode};
 use crate::command::{
     CommandPlan, GitReference, GoInstallSource, InstallRevision, PlanKind, SecretEnvironment,
-    command_exists, npm_executable,
+    command_exists, npm_executable, shell_quote_argument,
 };
 use crate::config::Config;
 use crate::error::DtrError;
@@ -168,6 +170,11 @@ pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
     } else {
         requested_tool
     };
+    if args.main && selected_tool != InstallTool::Go {
+        return Err(DtrError::new(format!(
+            "--main is currently supported only by the Go installer, but {selected_tool} was selected"
+        )));
+    }
     if let Some(query) = &go_query
         && selected_tool != InstallTool::Go
     {
@@ -246,6 +253,11 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
             "arguments after -- are supported only by the Cargo, uv, pipx, and npm installers",
         ));
     }
+    if args.main && !spec.is_local() {
+        return Err(DtrError::new(
+            "--main applies only to local Go repository installs",
+        ));
+    }
     require_command("go", "installing a Go command")?;
     let repospec = spec.description();
 
@@ -259,11 +271,18 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
             .local_path()
             .expect("local spec has a path")
             .to_path_buf();
+        let package = if args.main {
+            primary_go_package(&directory)?
+        } else {
+            OsString::from("./...")
+        };
         return Ok(CommandPlan {
-            kind: PlanKind::GoInstall(GoInstallSource::Local),
+            kind: PlanKind::GoInstall(GoInstallSource::Local {
+                package: package.clone(),
+            }),
             program: "go".into(),
             executable: "go".into(),
-            args: ["install", "./..."].map(OsString::from).to_vec(),
+            args: vec!["install".into(), package],
             current_dir: Some(directory.clone()),
             target_dir: None,
             preparations: Vec::new(),
@@ -307,6 +326,97 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
         removed_environment: Vec::new(),
         install_revision,
     })
+}
+
+#[derive(Deserialize)]
+struct GoPackageSummary {
+    #[serde(rename = "Name")]
+    name: String,
+
+    #[serde(rename = "Dir")]
+    directory: PathBuf,
+}
+
+fn primary_go_package(directory: &Path) -> Result<OsString, DtrError> {
+    if go_package_summaries(directory, ".")
+        .is_ok_and(|packages| packages.iter().any(|package| package.name == "main"))
+    {
+        return Ok(".".into());
+    }
+
+    let root = directory.canonicalize().map_err(|error| {
+        DtrError::new(format!(
+            "could not resolve local Go repository {} for --main: {error}",
+            directory.display()
+        ))
+    })?;
+    let mut candidates = go_package_summaries(directory, "./...")?
+        .into_iter()
+        .filter(|package| package.name == "main")
+        .map(|package| {
+            let relative = package.directory.strip_prefix(&root).map_err(|_| {
+                DtrError::new(format!(
+                    "go list reported a main package outside the repository for --main: {}",
+                    package.directory.display()
+                ))
+            })?;
+            Ok(if relative.as_os_str().is_empty() {
+                OsString::from(".")
+            } else {
+                Path::new(".").join(relative).into_os_string()
+            })
+        })
+        .collect::<Result<Vec<_>, DtrError>>()?;
+    candidates.sort();
+    candidates.dedup();
+
+    match candidates.as_slice() {
+        [] => Err(DtrError::new(
+            "--main could not find a main package in the local Go repository",
+        )),
+        [package] => Ok(package.clone()),
+        _ => Err(DtrError::new(format!(
+            "--main found multiple main packages and could not choose one: {}",
+            candidates
+                .iter()
+                .map(|candidate| shell_quote_argument(candidate))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+fn go_package_summaries(
+    directory: &Path,
+    package: &str,
+) -> Result<Vec<GoPackageSummary>, DtrError> {
+    let output = Command::new("go")
+        .args(["list", "-find", "-json", package])
+        .current_dir(directory)
+        .output()
+        .map_err(|error| {
+            DtrError::new(format!(
+                "could not start go while resolving --main: {error}"
+            ))
+        })?;
+    if !output.status.success() {
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        let diagnostic = diagnostic.trim();
+        return Err(DtrError::new(if diagnostic.is_empty() {
+            format!("go list {package} could not resolve --main")
+        } else {
+            format!("go list {package} could not resolve --main: {diagnostic}")
+        }));
+    }
+
+    serde_json::Deserializer::from_slice(&output.stdout)
+        .into_iter::<GoPackageSummary>()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            DtrError::new(format!(
+                "go list {package} returned invalid package metadata for --main: {error}"
+            ))
+        })
 }
 
 fn plan_cargo_install(context: InstallContext) -> Result<CommandPlan, DtrError> {

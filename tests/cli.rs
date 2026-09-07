@@ -355,6 +355,29 @@ if [ "${0##*/}" = go ] && [ "${1-}" = list ] && [ "${2-}" = -m ]; then
   exit "${DTR_TEST_GO_MODULE_EXIT-0}"
 fi
 
+if [ "${0##*/}" = go ] && [ "${1-}" = list ] && [ "${2-}" = -find ] && [ "${3-}" = -json ]; then
+  case "${4-}" in
+    .)
+      log="${DTR_TEST_LOG_DIR}/go-main-root"
+      output="${DTR_TEST_GO_ROOT_JSON-}"
+      status="${DTR_TEST_GO_ROOT_EXIT-0}"
+      ;;
+    './...')
+      log="${DTR_TEST_LOG_DIR}/go-main-all"
+      output="${DTR_TEST_GO_ALL_JSON-}"
+      status="${DTR_TEST_GO_ALL_EXIT-0}"
+      ;;
+    *) exit 97 ;;
+  esac
+  : > "$log"
+  printf 'cwd=<%s>\n' "$PWD" >> "$log"
+  for arg in "$@"; do
+    printf 'arg=<%s>\n' "$arg" >> "$log"
+  done
+  printf '%s\n' "$output"
+  exit "$status"
+fi
+
 if [ "${0##*/}" = go ] && [ "${1-}" = list ]; then
   log="${DTR_TEST_LOG_DIR}/go-list"
   : > "$log"
@@ -3843,9 +3866,13 @@ fn install_help_lists_the_tool_option_and_values() {
         help.contains("[possible values: go, cargo, uv, pipx, npm, auto]"),
         "{help}"
     );
-    assert!(help.contains("rust is an alias for cargo"), "{help}");
+    assert!(!help.contains("rust is an alias for cargo"), "{help}");
     assert!(
         help.contains("remote Go sources may end in @<query>"),
+        "{help}"
+    );
+    assert!(
+        help.contains("--main") && help.contains("currently local Go repositories only"),
         "{help}"
     );
 }
@@ -3968,6 +3995,155 @@ fn local_go_repo_installs_all_commands_from_that_directory() {
         fs::canonicalize(repo).unwrap()
     );
     assert_eq!(invocation.args, ["install", "./..."]);
+}
+
+#[test]
+fn local_go_main_prefers_the_root_command_and_is_tracked() {
+    let harness = Harness::new(&["go"]);
+    fs::write(harness.work.join("go.mod"), "module example.com/root\n").unwrap();
+    fs::write(harness.work.join("main.go"), "package main\n").unwrap();
+    let root = harness.work.canonicalize().unwrap();
+    let root_json = format!(r#"{{"Name":"main","Dir":{root:?}}}"#);
+
+    let added = harness
+        .command(&["k", "a", "--main"])
+        .env("DTR_TEST_GO_ROOT_JSON", &root_json)
+        .output()
+        .unwrap();
+    assert!(added.status.success(), "{}", stderr(&added));
+    assert_eq!(harness.invocation("go").args, ["install", "."]);
+    assert_eq!(
+        harness.invocation("go-main-root").args,
+        ["list", "-find", "-json", "."]
+    );
+    assert!(!harness.was_invoked("go-main-all"));
+
+    let config = fs::read_to_string(harness.kit_file()).unwrap();
+    assert!(config.contains("tool = \"go\""), "{config}");
+    assert!(config.contains("main = true"), "{config}");
+    let listed = harness.run(&["k", "ls"]);
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    assert!(stdout(&listed).contains("--main"), "{}", stdout(&listed));
+
+    fs::remove_file(harness.log.join("go")).unwrap();
+    let reinstalled = harness
+        .command(&["k", "i"])
+        .env("DTR_TEST_GO_ROOT_JSON", root_json)
+        .output()
+        .unwrap();
+    assert!(reinstalled.status.success(), "{}", stderr(&reinstalled));
+    assert_eq!(harness.invocation("go").args, ["install", "."]);
+}
+
+#[test]
+fn local_go_main_uses_the_only_nested_command_when_the_root_is_not_a_package() {
+    let harness = Harness::new(&["go"]);
+    let repo = harness.work.join("local repo");
+    let command = repo.join("cmd/tool");
+    fs::create_dir_all(&command).unwrap();
+    fs::write(repo.join("go.mod"), "module example.com/tool\n").unwrap();
+    let command = command.canonicalize().unwrap();
+    let all_json = format!(r#"{{"Name":"main","Dir":{command:?}}}"#);
+
+    let output = harness
+        .command(&["install", "--tool", "go", "--main", "./local repo"])
+        .env("DTR_TEST_GO_ROOT_EXIT", "1")
+        .env("DTR_TEST_GO_ALL_JSON", all_json)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(harness.invocation("go").args, ["install", "./cmd/tool"]);
+    assert_eq!(
+        harness.invocation("go-list").args,
+        [
+            "list",
+            "-f",
+            "{{if eq .Name \"main\"}}{{.Target}}{{end}}",
+            "./cmd/tool",
+        ]
+    );
+}
+
+#[test]
+fn local_go_main_fails_closed_when_multiple_commands_are_candidates() {
+    let harness = Harness::new(&["go"]);
+    let repo = harness.work.join("local repo");
+    let first = repo.join("cmd/one");
+    let second = repo.join("cmd/two");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    fs::write(repo.join("go.mod"), "module example.com/tool\n").unwrap();
+    let all_json = format!(
+        "{{\"Name\":\"main\",\"Dir\":{first:?}}}\n{{\"Name\":\"main\",\"Dir\":{second:?}}}",
+        first = first.canonicalize().unwrap(),
+        second = second.canonicalize().unwrap(),
+    );
+
+    let output = harness
+        .command(&["install", "--tool", "go", "--main", "./local repo"])
+        .env("DTR_TEST_GO_ROOT_EXIT", "1")
+        .env("DTR_TEST_GO_ALL_JSON", all_json)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let error = stderr(&output);
+    assert!(
+        error.contains("--main found multiple main packages"),
+        "{error}"
+    );
+    assert!(error.contains("./cmd/one"), "{error}");
+    assert!(error.contains("./cmd/two"), "{error}");
+    assert!(!harness.was_invoked("go"));
+}
+
+#[test]
+fn local_go_main_fails_closed_when_no_command_exists() {
+    let harness = Harness::new(&["go"]);
+    let repo = harness.work.join("local repo");
+    fs::create_dir(&repo).unwrap();
+    fs::write(repo.join("go.mod"), "module example.com/library\n").unwrap();
+    let library_json = format!(
+        r#"{{"Name":"library","Dir":{repo:?}}}"#,
+        repo = repo.canonicalize().unwrap()
+    );
+
+    let output = harness
+        .command(&["install", "--tool", "go", "--main", "./local repo"])
+        .env("DTR_TEST_GO_ROOT_JSON", &library_json)
+        .env("DTR_TEST_GO_ALL_JSON", library_json)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).contains("could not find a main package"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!harness.was_invoked("go"));
+}
+
+#[test]
+fn main_rejects_non_go_and_remote_go_installs_before_the_installer() {
+    let cargo = Harness::new(&["cargo"]);
+    fs::write(cargo.work.join("Cargo.toml"), "[package]\n").unwrap();
+    let output = cargo.run(&["install", "--main"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).contains("only by the Go installer, but cargo was selected"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!cargo.was_invoked("cargo"));
+
+    let go = Harness::new(&["go"]);
+    let output = go.run(&["install", "--tool", "go", "--main", "owner/tool"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr(&output).contains("only to local Go repository installs"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!go.was_invoked("go"));
 }
 
 #[test]

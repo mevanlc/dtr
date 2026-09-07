@@ -36,7 +36,7 @@ pub(crate) enum PlanKind {
 }
 
 pub(crate) enum GoInstallSource {
-    Local,
+    Local { package: OsString },
     Remote { import_path: OsString },
 }
 
@@ -355,13 +355,15 @@ impl CommandPlan {
 
     fn go_installed_binaries(&self, source: &GoInstallSource) -> Result<Vec<PathBuf>, String> {
         match source {
-            GoInstallSource::Local => {
-                let output = self.run_go_query([
-                    "list",
-                    "-f",
-                    "{{if eq .Name \"main\"}}{{.Target}}{{end}}",
-                    "./...",
-                ])?;
+            GoInstallSource::Local { package } => {
+                let mut arguments = [
+                    OsString::from("list"),
+                    OsString::from("-f"),
+                    OsString::from("{{if eq .Name \"main\"}}{{.Target}}{{end}}"),
+                ]
+                .to_vec();
+                arguments.push(package.clone());
+                let output = self.run_go_query(arguments)?;
                 let stdout =
                     successful_utf8_output(output, "go list could not report binary locations")?;
                 Ok(stdout
@@ -393,7 +395,10 @@ impl CommandPlan {
         }
     }
 
-    fn run_go_query<const N: usize>(&self, args: [&str; N]) -> Result<Output, String> {
+    fn run_go_query(
+        &self,
+        args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+    ) -> Result<Output, String> {
         let mut command = Command::new(&self.executable);
         command.args(args);
         apply_environment(&mut command, &self.environment, &self.removed_environment);

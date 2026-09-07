@@ -221,7 +221,7 @@ checkout is not persistently bound to that identity for later `git fetch` or
 ## Install from a repository
 
 ```text
-dtr [--explain|-n] [--narration|--no-narration] install|i [-a|--add] [-t|--tool <tool>] [--no-latest] [<dtr-repospec>] [-- <install-arg>...]
+dtr [--explain|-n] [--narration|--no-narration] install|i [-a|--add] [-t|--tool <tool>] [--no-latest] [--main] [<dtr-repospec>] [-- <install-arg>...]
 ```
 
 `install` is deliberately repo-oriented. Dtr does not wrap the package-registry
@@ -394,6 +394,22 @@ dtr install --tool go ./my-tool
 # logically: (cd ./my-tool && go install ./...)
 ```
 
+Use `--main` to install only the primary command from a local Go repository:
+
+```sh
+cd ./my-tool
+dtr kit add --main
+# logically: go install .
+```
+
+Dtr first checks the repository-root package. If it is `package main`, that
+package is installed even when the repository contains other commands. If the
+root is not a command, dtr searches the repository and selects a sole main
+package. Zero or multiple candidates produce an error before installation; an
+ambiguous error lists the candidate package paths. `--main` is currently
+rejected for non-Go backends and remote Go repositories. The selection is
+recorded as `main = true` when the request is added to a kit.
+
 The implementation sets the child process working directory directly; it never
 constructs a shell command.
 
@@ -420,7 +436,7 @@ updated without installing or writing it.
 ## Manage an installation kit
 
 ```text
-dtr [--explain|-n] [--narration|--no-narration] kit|k add|a [--no-install] [-t|--tool <tool>] [--no-latest] [<dtr-repospec>] [-- <install-arg>...]
+dtr [--explain|-n] [--narration|--no-narration] kit|k add|a [--no-install] [-t|--tool <tool>] [--no-latest] [--main] [<dtr-repospec>] [-- <install-arg>...]
 dtr [--explain|-n] [--narration|--no-narration] kit|k install|i [-j|--jobs <n|auto>] [-q|--quiet] [--force] [--file <FILE>]
 dtr kit|k list|ls [--file <FILE>]
 dtr [--explain|-n] kit|k edit [--file <FILE>]
@@ -432,11 +448,11 @@ and `ls` aliases `list`, while `a` aliases `add`. The aliases can be combined as
 
 `kit add` installs one repository and then tracks it, so `dtr kit add <spec>`
 is equivalent to `dtr install --add <spec>`. Its repository, tool, Go-version,
-and native-argument options match `dtr install`; the repository defaults to the
-current directory. Add `--no-install` to track the repository without invoking
-its installer; `-i`/`--install` states the default explicitly and conflicts with
-`--no-install`. Explain mode reports the kit file without installing or changing
-it.
+primary-command, and native-argument options match `dtr install`; the repository
+defaults to the current directory. Add `--no-install` to track the repository
+without invoking its installer; `-i`/`--install` states the default explicitly
+and conflicts with `--no-install`. Explain mode reports the kit file without
+installing or changing it.
 
 `kit install` reads `<user-home>/.config/dtr/kit.toml` and plans each
 `[[install]]` entry in file order. `DTR_CONFIG_DIR` overrides the containing
@@ -496,7 +512,8 @@ occurrence (`-qqq`) also suppresses dtr's execution narration, like
 Each entry requires `repospec`. It accepts the same repository references as
 `dtr install`, plus a leading `~/` for a path below the user home directory.
 `tool` defaults to `auto` and accepts the normal install tool values. `no_latest`
-defaults to `false`, and `args` is an array of native installer arguments with
+and `main` default to `false`; `main = true` requests the local Go primary-command
+selection described above. `args` is an array of native installer arguments with
 the same validation as arguments following `dtr install ... --`. A kit may have
 only one entry for each normalized repository; equivalent local paths and remote
 repository spellings count as the same repository. After successful installs,
@@ -525,10 +542,10 @@ args = ["--force", "--features", "pcre2"]
 informational purposes; `dirty = true` indicates that uncommitted changes were
 present at install time and prevents future kit install runs from skipping
 rebuilds until installed from a clean worktree; `request` covers the repository,
-tool, Go-version behavior, native arguments, and relevant dtr-managed installer
-options. Editing any of those inputs causes the next kit run to install again
-and replace the state. Removing `installed` also forces that entry's next normal
-installation.
+tool, Go-version and primary-command behavior, native arguments, and relevant
+dtr-managed installer options. Editing any of those inputs causes the next kit
+run to install again and replace the state. Removing `installed` also forces
+that entry's next normal installation.
 
 Malformed or missing configuration is a fatal error. Once the file has been
 loaded, an entry that cannot be planned, started, or completed emits a warning;
@@ -622,9 +639,9 @@ the resolved clone/install operation or creates its planned target directories.
   rejected rather than guessed at. Fragments on repository-root references are
   stripped, as are query parameters on GitHub HTTP(S) URLs.
 - Literal `scp://` and `sftp://` staging is parked for a later milestone.
-- Go module paths that differ from their repository paths, automatic package or
-  workspace selection in monorepos, GitLab/Enterprise account selection, and
-  Windows are later work.
+- Go module paths that differ from their repository paths, explicit package or
+  workspace selection in monorepos beyond local Go `--main`, GitLab/Enterprise
+  account selection, and Windows are later work.
 
 The overall finish line and current roadmap status live in
 [devdocs/FIRST-MVP.md](devdocs/FIRST-MVP.md). The current automatic install

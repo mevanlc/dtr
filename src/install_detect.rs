@@ -13,8 +13,7 @@ use crate::error::DtrError;
 use crate::github_auth::{self, GithubAuthSelection};
 use crate::repospec::{Forge, RepoSpec};
 
-const EXPLICIT_TOOL_SUGGESTION: &str =
-    "use --tool <go|cargo|uv|pipx|npm> to select one explicitly (rust is an alias for cargo)";
+const EXPLICIT_TOOL_SUGGESTION: &str = "use --tool <go|cargo|uv|pipx|npm> to select one explicitly";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Ecosystem {

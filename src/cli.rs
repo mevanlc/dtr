@@ -75,13 +75,17 @@ pub(crate) struct InstallArgs {
     #[arg(short = 'a', long)]
     pub(crate) add: bool,
 
-    /// Installer to use; rust is an alias for cargo
+    /// Installer to use
     #[arg(short = 't', long, default_value_t = InstallTool::Auto)]
     pub(crate) tool: InstallTool,
 
     /// Do not add @latest to a remote Go import path
     #[arg(long)]
     pub(crate) no_latest: bool,
+
+    /// Install only the primary command (currently local Go repositories only)
+    #[arg(long)]
+    pub(crate) main: bool,
 
     /// Repository name, path, or remote; remote Go sources may end in @<query>
     #[arg(value_name = "DTR_REPOSPEC", default_value = ".")]
@@ -126,13 +130,17 @@ pub(crate) struct KitAddArgs {
     #[arg(long, conflicts_with = "install")]
     pub(crate) no_install: bool,
 
-    /// Installer to use; rust is an alias for cargo
+    /// Installer to use
     #[arg(short = 't', long, default_value_t = InstallTool::Auto)]
     pub(crate) tool: InstallTool,
 
     /// Do not add @latest to a remote Go import path
     #[arg(long)]
     pub(crate) no_latest: bool,
+
+    /// Install only the primary command (currently local Go repositories only)
+    #[arg(long)]
+    pub(crate) main: bool,
 
     /// Repository name, path, or remote; remote Go sources may end in @<query>
     #[arg(value_name = "DTR_REPOSPEC", default_value = ".")]
@@ -153,6 +161,7 @@ impl KitAddArgs {
             add: true,
             tool: self.tool,
             no_latest: self.no_latest,
+            main: self.main,
             repospec: self.repospec,
             install_args: self.install_args,
         }
@@ -394,6 +403,16 @@ mod tests {
             panic!("expected install command");
         };
         assert!(args.add);
+
+        let install = Cli::try_parse_from(["dtr", "install", "--main"])
+            .expect("valid primary-command install");
+        let DtrCommand::Install(args) = install.command else {
+            panic!("expected install command");
+        };
+        assert!(args.main);
+
+        let args = parse_kit_add(&["dtr", "kit", "add", "--main"]);
+        assert!(args.main);
 
         for subcommand in ["list", "edit"] {
             let cli = Cli::try_parse_from(["dtr", "kit", subcommand, "--file", "other.toml"])
