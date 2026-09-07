@@ -222,12 +222,12 @@ pub(crate) fn finish_child_cleanup() {
     {
         use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
         use windows_sys::Win32::System::Threading::{
-            INFINITE, OpenProcess, PROCESS_TERMINATE, SYNCHRONIZE, TerminateProcess,
+            INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess,
             WaitForSingleObject,
         };
 
         unsafe {
-            let handle = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, parent_pid);
+            let handle = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, FALSE, parent_pid);
             if !handle.is_null() {
                 let _ = TerminateProcess(handle, 0);
                 let _ = WaitForSingleObject(handle, INFINITE);
