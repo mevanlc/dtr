@@ -607,8 +607,9 @@ suppressed.
 
 ## Explain before doing
 
-Put `-n` or `--explain` before the command to resolve the complete operation
-without performing it:
+Use `-n` or `--explain` to resolve the complete operation without performing it.
+Install, kit, and config subcommands inherit the flag, so it can appear before,
+between, or after their command names:
 
 ```sh
 dtr -n clone -D owner/repo
@@ -616,10 +617,17 @@ dtr --explain install owner/repo
 dtr --explain install --tool cargo owner/repo -- --locked
 dtr --explain install --tool uv owner/repo -- --force
 dtr --explain install --tool npm owner/repo -- --force
+dtr -n kit edit
+dtr kit -n edit
+dtr kit edit -n
 ```
 
-The position is intentional. Git already uses `clone -n` for `--no-checkout`,
-so both meanings remain available:
+The three kit examples are equivalent; `--explain` and the `k`/`e` aliases work
+in the same positions. Flags after the installer argument separator `--` are
+passed to the installer.
+
+For clone, put the explain flag before `clone`. Git already uses `clone -n`
+for `--no-checkout`, so both meanings remain available:
 
 ```sh
 dtr -n clone owner/repo  # explain

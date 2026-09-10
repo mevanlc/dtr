@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 )]
 pub(crate) struct Cli {
     /// Explain the fully resolved operation without performing it
-    #[arg(short = 'n', long)]
+    #[arg(short = 'n', long, global = true)]
     pub(crate) explain: bool,
 
     /// Print dtr's execution narration
@@ -62,7 +62,11 @@ pub(crate) struct CompletionArgs {
 }
 
 #[derive(Debug, Args)]
-#[command(trailing_var_arg = true)]
+// Override the inherited argument to keep clone's -n available to Git.
+#[command(
+    trailing_var_arg = true,
+    arg(clap::Arg::new("explain").long("explain").action(ArgAction::SetTrue))
+)]
 pub(crate) struct CloneArgs {
     /// dtr clone options, git clone options, repository, and optional directory
     #[arg(value_name = "ARG", num_args = 0.., allow_hyphen_values = true)]
@@ -321,9 +325,44 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
-    fn explain_is_a_pre_command_option() {
+    fn explain_is_inherited_at_every_subcommand_level() {
         let cli = Cli::try_parse_from(["dtr", "-n", "clone", "owner/repo"]).expect("valid command");
         assert!(cli.explain);
+
+        for flag in ["-n", "--explain"] {
+            for command in [
+                ["install", "owner/repo"],
+                ["kit", "edit"],
+                ["k", "e"],
+                ["config", "edit"],
+            ] {
+                for position in 0..=command.len() {
+                    let mut arguments = vec!["dtr"];
+                    arguments.extend(command);
+                    arguments.insert(position + 1, flag);
+                    let cli = Cli::try_parse_from(&arguments).expect("valid explain command");
+                    assert!(cli.explain, "{arguments:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn explain_flags_after_the_separator_are_native_installer_arguments() {
+        for command in [vec!["dtr", "install"], vec!["dtr", "kit", "add"]] {
+            let mut arguments = command;
+            arguments.extend(["owner/repo", "--", "-n", "--explain"]);
+            let cli = Cli::try_parse_from(arguments).expect("valid native installer arguments");
+            assert!(!cli.explain);
+            let install_args = match cli.command {
+                DtrCommand::Install(args) => args.install_args,
+                DtrCommand::Kit(KitArgs {
+                    command: KitCommand::Add(args),
+                }) => args.install_args,
+                _ => panic!("expected install or kit add command"),
+            };
+            assert_eq!(install_args, ["-n", "--explain"].map(OsString::from));
+        }
     }
 
     #[test]

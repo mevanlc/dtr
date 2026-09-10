@@ -63,8 +63,12 @@ dtr [--explain|-n] clone [clone-options] <dtr-repospec> [dir]
 dtr [--explain|-n] install|i --go [--no-latest] <dtr-repospec>
 ```
 
-`--explain` is a pre-command option on purpose. `git clone` already defines
-`-n` as `--no-checkout`, so both of these remain meaningful and unambiguous:
+※ `--explain` was originally a pre-command option only. Install, kit, and
+config subcommands now inherit `-n` / `--explain` at every command level.
+The clone spelling below still preserves Git's `-n` meaning.
+
+`git clone` already defines `-n` as `--no-checkout`, so both of these remain
+meaningful and unambiguous:
 
 ```text
 dtr -n clone owner/repo       # explain what dtr would run

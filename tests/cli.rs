@@ -2036,21 +2036,24 @@ fn kit_edit_honors_editor_precedence_and_arguments() {
 fn kit_edit_explain_is_read_only_and_falls_back_to_vim_before_vi() {
     let explain = Harness::new(&["vim", "vi"]);
     let alternate = explain.work.join("missing/kit.toml");
-    let output = explain.run(&[
-        "--explain",
-        "kit",
-        "edit",
-        "--file",
-        alternate.to_str().unwrap(),
-    ]);
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(
-        stdout(&output),
-        format!("command:  vim {}\n", alternate.display())
-    );
-    assert!(!explain.was_invoked("vim"));
-    assert!(!explain.was_invoked("vi"));
-    assert!(!alternate.parent().unwrap().exists());
+    for flag in ["-n", "--explain"] {
+        for command in [["kit", "edit"], ["k", "e"]] {
+            for position in 0..=command.len() {
+                let mut arguments = command.to_vec();
+                arguments.insert(position, flag);
+                arguments.extend(["--file", alternate.to_str().unwrap()]);
+                let output = explain.run(&arguments);
+                assert!(output.status.success(), "{}", stderr(&output));
+                assert_eq!(
+                    stdout(&output),
+                    format!("command:  vim {}\n", alternate.display())
+                );
+                assert!(!explain.was_invoked("vim"));
+                assert!(!explain.was_invoked("vi"));
+                assert!(!alternate.parent().unwrap().exists());
+            }
+        }
+    }
 
     let execute = Harness::new(&["vim", "vi"]);
     let output = execute.run(&["kit", "edit"]);
