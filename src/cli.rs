@@ -117,6 +117,7 @@ pub(crate) enum KitCommand {
     List(KitFileArgs),
 
     /// Edit the kit configuration
+    #[command(visible_alias = "e")]
     Edit(KitFileArgs),
 }
 

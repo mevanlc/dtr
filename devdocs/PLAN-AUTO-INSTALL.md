@@ -45,6 +45,7 @@ trigger migration.
 
 The current command hierarchy has visible shorthand aliases: `dtr k` for
 `dtr kit`, `dtr k i` for `dtr kit install`, and `dtr k ls` for `dtr kit list`.
+`dtr kit e` and `dtr k e` also alias `dtr kit edit`.
 
 `--add` retains normal install planning and execution, then records the successful
 request in the default `kit.toml`. Local paths are stored canonically; Windows

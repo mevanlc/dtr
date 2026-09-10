@@ -439,12 +439,12 @@ updated without installing or writing it.
 dtr [--explain|-n] [--narration|--no-narration] kit|k add|a [--no-install] [-t|--tool <tool>] [--no-latest] [--main] [<dtr-repospec>] [-- <install-arg>...]
 dtr [--explain|-n] [--narration|--no-narration] kit|k install|i [-j|--jobs <n|auto>] [-q|--quiet] [--force] [--file <FILE>]
 dtr kit|k list|ls [--file <FILE>]
-dtr [--explain|-n] kit|k edit [--file <FILE>]
+dtr [--explain|-n] kit|k edit|e [--file <FILE>]
 ```
 
-`k` is a visible alias for `kit`; within that namespace, `i` aliases `install`
-and `ls` aliases `list`, while `a` aliases `add`. The aliases can be combined as
-`dtr k a`, `dtr k i`, and `dtr k ls`.
+`k` is a visible alias for `kit`; within that namespace, `i` aliases `install`,
+`ls` aliases `list`, `a` aliases `add`, and `e` aliases `edit`. The aliases can be
+combined as `dtr k a`, `dtr k i`, `dtr k ls`, and `dtr k e`.
 
 `kit add` installs one repository and then tracks it, so `dtr kit add <spec>`
 is equivalent to `dtr install --add <spec>`. Its repository, tool, Go-version,

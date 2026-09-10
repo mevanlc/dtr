@@ -916,6 +916,7 @@ fn kit_aliases_are_visible_and_execute() {
     assert!(help_text.contains("[alias: a]"), "{help_text}");
     assert!(help_text.contains("[alias: i]"), "{help_text}");
     assert!(help_text.contains("[alias: ls]"), "{help_text}");
+    assert!(help_text.contains("[alias: e]"), "{help_text}");
 
     let list = harness.run(&["k", "ls"]);
     assert!(list.status.success(), "{}", stderr(&list));
@@ -2005,23 +2006,30 @@ fn kit_execution_uses_the_alternate_config() {
 
 #[test]
 fn kit_edit_honors_editor_precedence_and_arguments() {
-    let harness = Harness::new(&["dtr-editor", "visual-editor", "plain-editor"]);
-    let alternate = harness.work.join("nested/kit.toml");
-    let output = harness
-        .command(&["kit", "edit", "--file", alternate.to_str().unwrap()])
-        .env("DTR_EDITOR", "dtr-editor --wait")
-        .env("VISUAL", "visual-editor")
-        .env("EDITOR", "plain-editor")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(
-        harness.invocation("dtr-editor").args,
-        ["--wait", alternate.to_str().unwrap()]
-    );
-    assert!(!harness.was_invoked("visual-editor"));
-    assert!(!harness.was_invoked("plain-editor"));
-    assert!(alternate.parent().unwrap().is_dir());
+    for command in [["kit", "edit"], ["kit", "e"], ["k", "edit"], ["k", "e"]] {
+        let harness = Harness::new(&["dtr-editor", "visual-editor", "plain-editor"]);
+        let alternate = harness.work.join("nested/kit.toml");
+        let output = harness
+            .command(&[
+                command[0],
+                command[1],
+                "--file",
+                alternate.to_str().unwrap(),
+            ])
+            .env("DTR_EDITOR", "dtr-editor --wait")
+            .env("VISUAL", "visual-editor")
+            .env("EDITOR", "plain-editor")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(
+            harness.invocation("dtr-editor").args,
+            ["--wait", alternate.to_str().unwrap()]
+        );
+        assert!(!harness.was_invoked("visual-editor"));
+        assert!(!harness.was_invoked("plain-editor"));
+        assert!(alternate.parent().unwrap().is_dir());
+    }
 }
 
 #[test]
