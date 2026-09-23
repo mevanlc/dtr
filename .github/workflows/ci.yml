@@ -17,6 +17,7 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
+          - windows-latest
 
     steps:
       - uses: actions/checkout@v6
@@ -30,5 +31,8 @@ jobs:
 
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo build --locked --example dtr-trampoline
       - run: cargo nextest run --locked
+      - name: Exercise real Cargo self-installation
+        run: cargo nextest run --locked --run-ignored only -E 'test(real_cargo_repeated_self_install)'
       - run: cargo check --locked

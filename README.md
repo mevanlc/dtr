@@ -5,7 +5,7 @@
 It accepts the repository reference you already have, resolves what it means,
 and invokes the appropriate underlying tool. It supports forge-aware cloning,
 process-scoped GitHub account selection, and Rust, Go, Python, and JavaScript
-tool installation from repositories on macOS and Linux.
+tool installation from repositories on macOS, Linux, and Windows.
 
 The first-MVP feature set is complete in dtr 0.1.0. Its phase-by-phase finish
 line and completion audit are recorded in [devdocs/FIRST-MVP.md](devdocs/FIRST-MVP.md).
@@ -53,6 +53,28 @@ From this checkout:
 ```sh
 cargo install --path .
 ```
+
+### Reinstall dtr from its checkout
+
+`dtr install .` can rebuild and reinstall dtr itself on macOS, Linux, and
+Windows. This also works through `install --add`, `kit add`, and a local dtr
+entry in `kit install`.
+
+Dtr builds its internal `dtr-trampoline` example for the host platform, then
+runs it directly from Cargo's output directory with the original arguments and
+working directory. The helper uses the same application code and performs the
+normal installation. It is excluded from ordinary `cargo install`; there is
+no additional installed command or temporary executable copy. Cargo's reported
+artifact path is used, including when a custom target directory is configured.
+
+Another self-install using the same build directory or running executable
+fails immediately with `self-install already in progress`. On Windows, dtr
+renames its running executable to `dtr.exe.old` and waits for the helper. If
+the original path remains missing after the helper exits, dtr restores the
+backup. A successful replacement leaves the backup for cleanup on the next
+non-explain command; the waiting parent preserves the helper's exit status.
+Explain mode does not build the helper or clean up backups. Automatic
+trampolining currently applies to local dtr repositories, not remote sources.
 
 Cloning requires Git. Depending on the operation, dtr also uses:
 
@@ -648,8 +670,8 @@ the resolved clone/install operation or creates its planned target directories.
   stripped, as are query parameters on GitHub HTTP(S) URLs.
 - Literal `scp://` and `sftp://` staging is parked for a later milestone.
 - Go module paths that differ from their repository paths, explicit package or
-  workspace selection in monorepos beyond local Go `--main`, GitLab/Enterprise
-  account selection, and Windows are later work.
+  workspace selection in monorepos beyond local Go `--main`, and GitLab/Enterprise
+  account selection are later work.
 
 The overall finish line and current roadmap status live in
 [devdocs/FIRST-MVP.md](devdocs/FIRST-MVP.md). The current automatic install

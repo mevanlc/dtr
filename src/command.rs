@@ -7,9 +7,10 @@ use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::Arc;
 #[cfg(unix)]
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::error::DtrError;
 
@@ -70,6 +71,7 @@ pub(crate) struct SecretEnvironment {
 
 pub(crate) struct InterruptState {
     interrupt_count: AtomicUsize,
+    supervising: AtomicBool,
     #[cfg(unix)]
     active_process_groups: Mutex<HashSet<u32>>,
 }
@@ -85,9 +87,34 @@ impl InterruptState {
     pub(crate) fn new() -> Self {
         Self {
             interrupt_count: AtomicUsize::new(0),
+            supervising: AtomicBool::new(false),
             #[cfg(unix)]
             active_process_groups: Mutex::new(HashSet::new()),
         }
+    }
+
+    pub(crate) fn install_handler() -> Result<Arc<Self>, DtrError> {
+        let state = Arc::new(Self::new());
+        let handler = Arc::clone(&state);
+        ctrlc::set_handler(move || {
+            let count = handler.request_interrupt();
+            // The trampoline supervisor must remain alive for rollback and
+            // status propagation. Its child receives console signals directly.
+            if handler.supervising.load(Ordering::Acquire) {
+                return;
+            }
+            match count {
+                0 => {}
+                1 => handler.stop_active_children(),
+                _ => std::process::exit(130),
+            }
+        })
+        .map_err(|error| DtrError::new(format!("could not install Ctrl-C handler: {error}")))?;
+        Ok(state)
+    }
+
+    pub(crate) fn supervise(&self) {
+        self.supervising.store(true, Ordering::Release);
     }
 
     pub(crate) fn request_interrupt(&self) -> usize {
@@ -264,6 +291,8 @@ impl CommandPlan {
 
         let mut command = Command::new(&self.executable);
         command.args(&self.args);
+        // The Unix exec handoff belongs only to dtr, never its installer.
+        command.env_remove(crate::self_rebuild::DTR_SELF_LOCKS);
         match tool_output {
             ToolOutput::Inherit => {}
             ToolOutput::SuppressStdout => {

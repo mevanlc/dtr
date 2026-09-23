@@ -3,6 +3,10 @@
 Status: complete — 5 of 5 phases complete; automatic install selection was
 delivered as a post-MVP increment (2026-07-23)
 
+※ Subsequent platform work adds native Windows CI and local self-installation
+through an internal Cargo example trampoline. The macOS/Linux finish line
+below records the original MVP scope; see the README for current behavior.
+
 `※` marks a historical statement or section whose interface or roadmap status
 has since been superseded by [PLAN-AUTO-INSTALL.md](PLAN-AUTO-INSTALL.md).
 

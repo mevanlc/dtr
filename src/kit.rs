@@ -4,8 +4,8 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{self, Command};
-use std::sync::{Arc, Mutex};
+use std::process::Command;
+use std::sync::Mutex;
 use std::thread;
 
 use serde::{Deserialize, Serialize};
@@ -236,7 +236,7 @@ pub(crate) fn run(
     let interrupted = if explain {
         None
     } else {
-        Some(install_interrupt_handler()?)
+        Some(InterruptState::install_handler()?)
     };
     let home = home::home_dir();
     let mut failed = false;
@@ -368,8 +368,7 @@ pub(crate) fn run(
             .find(|job| self_rebuild::is_self_install_entry(&job.entry))
             && let Some(package_root) = self_rebuild::resolve_local_package_root(&self_job.repospec)
         {
-            let target_binary = self_rebuild::build_dtr_release(&package_root)?;
-            return self_rebuild::trampoline_execute(&target_binary);
+            return self_rebuild::execute(&package_root, interrupted.clone());
         }
 
         let execution = execute_jobs(
@@ -463,8 +462,7 @@ pub(crate) fn run_install_and_add(
     if self_rebuild::is_self_install_entry(&entry)
         && let Some(package_root) = self_rebuild::resolve_local_package_root(&entry.repospec)
     {
-        let target_binary = self_rebuild::build_dtr_release(&package_root)?;
-        return self_rebuild::trampoline_execute(&target_binary);
+        return self_rebuild::execute(&package_root, None);
     }
 
     let runtime_config = if narration_override.is_none()
@@ -658,22 +656,6 @@ fn execute_job(
         messages,
         state_update,
     }
-}
-
-fn install_interrupt_handler() -> Result<Arc<InterruptState>, DtrError> {
-    let interrupted = Arc::new(InterruptState::new());
-    let handler_state = Arc::clone(&interrupted);
-    ctrlc::set_handler(move || match handler_state.request_interrupt() {
-        0 => {}
-        1 => {
-            handler_state.stop_active_children();
-        }
-        _ => {
-            process::exit(130);
-        }
-    })
-    .map_err(|error| DtrError::new(format!("could not install Ctrl-C handler: {error}")))?;
-    Ok(interrupted)
 }
 
 fn selected_file_path(

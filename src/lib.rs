@@ -21,16 +21,15 @@ use crate::error::DtrError;
 use crate::resolve::{plan_clone, plan_install};
 
 pub fn main_entry() -> i32 {
-    self_rebuild::sweep_stale_old_binaries();
-    let code = match run() {
+    // Both executable entry points call this before starting any threads.
+    let result = self_rebuild::adopt_locks().and_then(|_locks| run());
+    match result {
         Ok(code) => code,
         Err(error) => {
             eprintln!("dtr: error: {error}");
             2
         }
-    };
-    self_rebuild::finish_child_cleanup();
-    code
+    }
 }
 
 fn run() -> Result<i32, DtrError> {
@@ -40,6 +39,10 @@ fn run() -> Result<i32, DtrError> {
         no_narration,
         command,
     } = Cli::parse();
+
+    if !explain {
+        self_rebuild::sweep_stale_old_binary();
+    }
 
     let narration_override = if narration {
         Some(true)
@@ -85,8 +88,7 @@ fn run() -> Result<i32, DtrError> {
                 && let Some(package_root) =
                     self_rebuild::resolve_local_package_root(&entry.repospec)
             {
-                let target_binary = self_rebuild::build_dtr_release(&package_root)?;
-                return self_rebuild::trampoline_execute(&target_binary);
+                return self_rebuild::execute(&package_root, None);
             }
             plan_install(args)?
         }

@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 description = "Do The Repo repo"
 
+# Internal trampoline, built explicitly. An example target keeps it out of
+# ordinary `cargo install`, including while the helper itself is running.
+[[example]]
+name = "dtr-trampoline"
+path = "src/trampoline.rs"
+
 [dependencies]
 base64 = "0.23"
 clap = { version = "4.6.4", features = ["derive"] }
@@ -19,9 +25,3 @@ tempfile = "3"
 toml = "1"
 toml_edit = "0.25"
 url = "2.5.8"
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", default-features = false, features = [
-    "Win32_Foundation",
-    "Win32_System_Threading",
-] }
