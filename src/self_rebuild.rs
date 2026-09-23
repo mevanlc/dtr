@@ -162,7 +162,9 @@ pub(crate) fn trampoline_execute(target_binary: &Path) -> Result<i32, DtrError> 
             ))
         })?;
 
-        let mut command = Command::new(target_binary);
+        let temp_exe = create_trampoline_binary(target_binary)?;
+
+        let mut command = Command::new(&temp_exe);
         if args.len() > 1 {
             command.args(&args[1..]);
         }
@@ -179,9 +181,10 @@ pub(crate) fn trampoline_execute(target_binary: &Path) -> Result<i32, DtrError> 
 
         let mut child = command.spawn().map_err(|error| {
             let _ = fs::rename(&old_exe, &current_exe);
+            let _ = fs::remove_file(&temp_exe);
             DtrError::new(format!(
                 "could not start trampoline process {}: {error}",
-                target_binary.display()
+                temp_exe.display()
             ))
         })?;
 
@@ -192,6 +195,8 @@ pub(crate) fn trampoline_execute(target_binary: &Path) -> Result<i32, DtrError> 
             let _ = fs::rename(&old_exe, &current_exe);
         }
 
+        let _ = fs::remove_file(&temp_exe);
+
         let code = status.map(|s| s.code().unwrap_or(1)).unwrap_or(1);
 
         if interrupted.load(Ordering::Acquire) {
@@ -200,6 +205,28 @@ pub(crate) fn trampoline_execute(target_binary: &Path) -> Result<i32, DtrError> 
             Ok(code)
         }
     }
+}
+
+#[cfg(not(unix))]
+fn create_trampoline_binary(target_binary: &Path) -> Result<PathBuf, DtrError> {
+    let temp_dir = env::temp_dir();
+    let unique_id = format!(
+        "dtr-trampoline-{}-{}.exe",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let temp_exe = temp_dir.join(unique_id);
+    fs::copy(target_binary, &temp_exe).map_err(|error| {
+        DtrError::new(format!(
+            "could not copy trampoline binary from {} to {}: {error}",
+            target_binary.display(),
+            temp_exe.display()
+        ))
+    })?;
+    Ok(temp_exe)
 }
 
 #[cfg(not(unix))]
@@ -255,6 +282,18 @@ pub(crate) fn sweep_stale_old_binaries() {
         let old_exe = current_exe.with_extension("exe.old");
         if old_exe.exists() {
             let _ = fs::remove_file(old_exe);
+        }
+    }
+    let temp_dir = env::temp_dir();
+    if let Ok(entries) = fs::read_dir(&temp_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str())
+                && file_name.starts_with("dtr-trampoline-")
+                && file_name.ends_with(".exe")
+            {
+                let _ = fs::remove_file(path);
+            }
         }
     }
 }
@@ -321,6 +360,14 @@ mod tests {
             let _ = fs::remove_file(&old_file);
         }
         assert!(!old_file.exists());
+
+        let trampoline_file = dir.path().join("dtr-trampoline-1234-5678.exe");
+        fs::write(&trampoline_file, "stale trampoline").unwrap();
+        assert!(trampoline_file.exists());
+        if trampoline_file.exists() {
+            let _ = fs::remove_file(&trampoline_file);
+        }
+        assert!(!trampoline_file.exists());
     }
 
     #[test]
