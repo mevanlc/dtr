@@ -1001,9 +1001,22 @@ fn local_git_installs_record_clean_commits_skip_and_force() {
     assert!(!harness.was_invoked("cargo"));
     assert_eq!(
         stderr(&cached).matches("up to date:").count(),
-        1,
+        0,
         "{}",
         stderr(&cached)
+    );
+
+    let cached_verbose = harness.run(&["kit", "install", "--verbose"]);
+    assert!(
+        cached_verbose.status.success(),
+        "{}",
+        stderr(&cached_verbose)
+    );
+    assert_eq!(
+        stderr(&cached_verbose).matches("up to date:").count(),
+        1,
+        "{}",
+        stderr(&cached_verbose)
     );
 
     let edited = fs::read_to_string(harness.kit_file()).unwrap().replace(
@@ -1082,7 +1095,7 @@ fn local_git_installs_record_clean_commits_skip_and_force() {
     assert!(!harness.was_invoked("cargo"));
     assert_eq!(
         stderr(&clean_cached).matches("up to date:").count(),
-        1,
+        0,
         "{}",
         stderr(&clean_cached)
     );
@@ -1107,7 +1120,7 @@ fn local_git_installs_record_clean_commits_skip_and_force() {
     );
     assert_eq!(
         stderr(&branch_switched).matches("up to date:").count(),
-        1,
+        0,
         "{}",
         stderr(&branch_switched)
     );
@@ -1128,7 +1141,7 @@ fn local_git_installs_record_clean_commits_skip_and_force() {
     );
     assert_eq!(
         stderr(&detached).matches("up to date:").count(),
-        1,
+        0,
         "{}",
         stderr(&detached)
     );

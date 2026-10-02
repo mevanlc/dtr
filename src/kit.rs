@@ -338,7 +338,7 @@ pub(crate) fn run(
                 repospec,
                 short_revision(&before_revision.as_ref().expect("cached revision").commit)
             );
-            let messages = if narration {
+            let messages = if narration && args.verbose {
                 vec![DtrMessage::Stderr(message)]
             } else {
                 Vec::new()

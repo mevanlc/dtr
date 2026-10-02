@@ -184,8 +184,12 @@ pub(crate) struct KitInstallArgs {
     pub(crate) jobs: Jobs,
 
     /// Suppress installer stdout; repeat for stderr, then dtr narration
-    #[arg(short = 'q', long, action = ArgAction::Count)]
+    #[arg(short = 'q', long, action = ArgAction::Count, conflicts_with = "verbose")]
     pub(crate) quiet: u8,
+
+    /// Print details about skipped, up-to-date repositories
+    #[arg(short = 'v', long, conflicts_with = "quiet")]
+    pub(crate) verbose: bool,
 
     /// Install even when the recorded Git revision is still current
     #[arg(long)]
