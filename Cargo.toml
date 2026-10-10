@@ -1,8 +1,19 @@
 [package]
 name = "dtr"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2024"
-description = "Do The Repo repo"
+description = "Forge-aware repository cloning and tool installation"
+license = "MIT"
+repository = "https://github.com/mevanlc/dtr"
+readme = "README.md"
+keywords = ["git", "github", "clone", "install", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+autobins = false
+include = ["/src/**", "/tests/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/RELEASING.md", "/LICENSE"]
+
+[[bin]]
+name = "dtr"
+path = "src/main.rs"
 
 # Internal trampoline, built explicitly. An example target keeps it out of
 # ordinary `cargo install`, including while the helper itself is running.

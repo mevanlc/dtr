@@ -1,4 +1,7 @@
 /target
+/dist
+/scripts/__pycache__
+/.ruff_cache
 
 # ignore files in /devdocs/ that match UUID pattern:
 

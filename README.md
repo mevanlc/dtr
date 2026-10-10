@@ -48,11 +48,20 @@ command:  gh repo clone https://github.com/mike-clark-8192/foo.git
 
 ## Install
 
+Release downloads go to [GitHub Releases](https://github.com/mevanlc/dtr/releases).
+Extract an archive and put `dtr` on your PATH. The release workflow builds Linux (static musl),
+macOS, and Windows for x64 and ARM64, plus Android ARM64. Android execution
+is not covered by hosted CI. FreeBSD release builds are deferred.
+
+After the first crates.io publication, install with `cargo install dtr --locked`.
 From this checkout:
 
 ```sh
-cargo install --path .
+cargo install --path . --locked
 ```
+
+Release tags supply the version; checkout builds report `0.0.0`. See
+[RELEASING.md](RELEASING.md) for CI, publishing, verification, and recovery.
 
 ### Reinstall dtr from its checkout
 
@@ -729,5 +738,9 @@ by the current install interface or roadmap status.
 just check
 ```
 
-This runs formatting, Clippy, the nextest suite, `cargo check`, `actionlint`,
-and `git diff --check`.
+This runs formatting, Clippy, nextest, doctests, `cargo check`, release helper
+tests, `actionlint`, and `git diff --check`.
+
+## License
+
+[MIT](LICENSE).

@@ -5,6 +5,8 @@ check:
     cargo fmt --all --check
     cargo clippy --all-targets --all-features --locked -- -D warnings
     cargo nextest run --locked
+    cargo test --doc --locked
     cargo check --locked
-    actionlint .github/workflows/ci.yml
+    uv run scripts/test_release.py
+    actionlint
     git diff --check

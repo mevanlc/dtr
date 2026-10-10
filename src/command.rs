@@ -985,7 +985,7 @@ mod tests {
             plan.render_command(),
             "npm install --global '--prefix=two&words' -- ./tool"
         );
-        assert_eq!(plan.execute(false).unwrap(), 0);
+        assert_eq!(plan.execute(Verbosity::default()).unwrap(), 0);
     }
 
     #[cfg(windows)]
