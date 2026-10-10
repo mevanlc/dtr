@@ -637,15 +637,15 @@ fn configured_uv_install_flags_precede_the_resolved_source() {
         assert!(set.status.success(), "{}", stderr(&set));
     }
 
-    let explain = harness.run(&["-n", "install", "--tool", "uv", "owner/tool"]);
-    assert!(explain.status.success(), "{}", stderr(&explain));
+    let dry_run = harness.run(&["-n", "install", "--tool", "uv", "owner/tool"]);
+    assert!(dry_run.status.success(), "{}", stderr(&dry_run));
     assert!(
-        stdout(&explain).contains(
+        stdout(&dry_run).contains(
             "command:  uv tool install --force --reinstall \
              git+https://github.com/owner/tool.git\n"
         ),
         "{}",
-        stdout(&explain)
+        stdout(&dry_run)
     );
 
     let output = harness.run(&[
@@ -752,17 +752,17 @@ fn config_edit_honors_editor_precedence_and_arguments() {
 }
 
 #[test]
-fn config_edit_explain_is_read_only_and_does_not_require_valid_config() {
-    let explain = Harness::new(&["vim", "vi"]);
-    explain.write_config("not valid toml = [");
-    let output = explain.run(&["--explain", "config", "edit"]);
+fn config_edit_dry_run_is_read_only_and_does_not_require_valid_config() {
+    let dry_run = Harness::new(&["vim", "vi"]);
+    dry_run.write_config("not valid toml = [");
+    let output = dry_run.run(&["--dry-run", "config", "edit"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        format!("command:  vim {}\n", explain.config_file().display())
+        format!("command:  vim {}\n", dry_run.config_file().display())
     );
-    assert!(!explain.was_invoked("vim"));
-    assert!(!explain.was_invoked("vi"));
+    assert!(!dry_run.was_invoked("vim"));
+    assert!(!dry_run.was_invoked("vi"));
 
     let execute = Harness::new(&["vim", "vi"]);
     let output = execute.run(&["config", "edit"]);
@@ -845,24 +845,25 @@ fn completion_generates_scripts_for_supported_shells() {
         let output = harness.run(&["completion", shell]);
         assert!(output.status.success(), "{shell}: {}", stderr(&output));
         assert!(stdout(&output).contains("dtr"), "{shell}");
+        assert!(stdout(&output).contains("dry-run"), "{shell}");
         assert_eq!(stderr(&output), "", "{shell}");
     }
 }
 
 #[test]
-fn completion_rejects_unknown_shells_and_explain() {
+fn completion_rejects_unknown_shells_and_dry_run() {
     let harness = Harness::new(&[]);
 
     let unknown = harness.run(&["completion", "nu"]);
     assert_eq!(unknown.status.code(), Some(2));
     assert!(stderr(&unknown).contains("invalid value 'nu'"));
 
-    let explain = harness.run(&["--explain", "completion", "zsh"]);
-    assert_eq!(explain.status.code(), Some(2));
+    let dry_run = harness.run(&["--dry-run", "completion", "zsh"]);
+    assert_eq!(dry_run.status.code(), Some(2));
     assert!(
-        stderr(&explain).contains("--explain does not apply to dtr completion"),
+        stderr(&dry_run).contains("--dry-run does not apply to dtr completion"),
         "{}",
-        stderr(&explain)
+        stderr(&dry_run)
     );
 }
 
@@ -936,9 +937,9 @@ fn kit_add_installs_by_default_and_can_track_without_installing() {
     let tracked_repo = harness.local_repository("tracked-only", &["Cargo.toml"], &[]);
     let installed_repo = harness.local_repository("installed", &["Cargo.toml"], &[]);
 
-    let explain = harness.run(&["--explain", "kit", "add", "--no-install", &tracked_repo]);
-    assert!(explain.status.success(), "{}", stderr(&explain));
-    assert!(stdout(&explain).contains("track:    "));
+    let dry_run = harness.run(&["--dry-run", "kit", "add", "--no-install", &tracked_repo]);
+    assert!(dry_run.status.success(), "{}", stderr(&dry_run));
+    assert!(stdout(&dry_run).contains("track:    "));
     assert!(!harness.kit_file().exists());
     assert!(!harness.was_invoked("cargo"));
 
@@ -1256,13 +1257,13 @@ fn remote_git_head_is_recorded_and_skipped_when_unchanged() {
     );
 
     fs::remove_file(harness.log.join("cargo")).unwrap();
-    let explain = harness
-        .command(&["--explain", "kit", "install"])
+    let dry_run = harness
+        .command(&["--dry-run", "kit", "install"])
         .env("DTR_TEST_GIT_LS_REMOTE_OUTPUT", &branch_remote)
         .output()
         .unwrap();
-    assert!(explain.status.success(), "{}", stderr(&explain));
-    assert!(stdout(&explain).contains("skip:"), "{}", stdout(&explain));
+    assert!(dry_run.status.success(), "{}", stderr(&dry_run));
+    assert!(stdout(&dry_run).contains("skip:"), "{}", stdout(&dry_run));
     assert!(!harness.was_invoked("cargo"));
 
     let failed_probe = harness
@@ -1389,7 +1390,7 @@ fn kit_warns_and_continues_after_an_entry_cannot_be_planned() {
 }
 
 #[test]
-fn kit_explain_prints_every_plan_without_running_installers() {
+fn kit_dry_run_prints_every_plan_without_running_installers() {
     let harness = Harness::new(&["cargo"]);
     let cargo_repo = harness.work.join("ripgrep");
     fs::create_dir_all(&cargo_repo).unwrap();
@@ -1403,7 +1404,7 @@ fn kit_explain_prints_every_plan_without_running_installers() {
         cargo_repo = cargo_repo.display().to_string(),
     ));
 
-    let output = harness.run(&["--explain", "kit", "install", "--jobs", "3"]);
+    let output = harness.run(&["--dry-run", "kit", "install", "--jobs", "3"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let output_text = stdout(&output);
     assert!(output_text.starts_with("jobs: 3\n\n"), "{output_text}");
@@ -1806,8 +1807,8 @@ tool = "go"
 "#;
     harness.write_kit(original);
 
-    let explain = harness.run(&[
-        "--explain",
+    let dry_run = harness.run(&[
+        "--dry-run",
         "install",
         "--add",
         &repo,
@@ -1816,8 +1817,8 @@ tool = "go"
         "--features",
         "pcre2",
     ]);
-    assert!(explain.status.success(), "{}", stderr(&explain));
-    assert!(stdout(&explain).contains("track:    "));
+    assert!(dry_run.status.success(), "{}", stderr(&dry_run));
+    assert!(stdout(&dry_run).contains("track:    "));
     assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), original);
     assert!(!harness.was_invoked("cargo"));
 
@@ -1973,12 +1974,12 @@ fn existing_kit_prevents_legacy_configuration_migration() {
 }
 
 #[test]
-fn kit_edit_explain_does_not_migrate_the_legacy_configuration() {
+fn kit_edit_dry_run_does_not_migrate_the_legacy_configuration() {
     let harness = Harness::new(&["vim"]);
     let legacy = "[[install]]\nrepospec = \"owner/legacy\"\ntool = \"go\"\n";
     harness.write_legacy_kit(legacy);
 
-    let output = harness.run(&["--explain", "kit", "edit"]);
+    let output = harness.run(&["--dry-run", "kit", "edit"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         stdout(&output),
@@ -2046,23 +2047,23 @@ fn kit_edit_honors_editor_precedence_and_arguments() {
 }
 
 #[test]
-fn kit_edit_explain_is_read_only_and_falls_back_to_vim_before_vi() {
-    let explain = Harness::new(&["vim", "vi"]);
-    let alternate = explain.work.join("missing/kit.toml");
-    for flag in ["-n", "--explain"] {
+fn kit_edit_dry_run_is_read_only_and_falls_back_to_vim_before_vi() {
+    let dry_run = Harness::new(&["vim", "vi"]);
+    let alternate = dry_run.work.join("missing/kit.toml");
+    for flag in ["-n", "--dry-run"] {
         for command in [["kit", "edit"], ["k", "e"]] {
             for position in 0..=command.len() {
                 let mut arguments = command.to_vec();
                 arguments.insert(position, flag);
                 arguments.extend(["--file", alternate.to_str().unwrap()]);
-                let output = explain.run(&arguments);
+                let output = dry_run.run(&arguments);
                 assert!(output.status.success(), "{}", stderr(&output));
                 assert_eq!(
                     stdout(&output),
                     format!("command:  vim {}\n", alternate.display())
                 );
-                assert!(!explain.was_invoked("vim"));
-                assert!(!explain.was_invoked("vi"));
+                assert!(!dry_run.was_invoked("vim"));
+                assert!(!dry_run.was_invoked("vi"));
                 assert!(!alternate.parent().unwrap().exists());
             }
         }
@@ -2163,11 +2164,11 @@ fn malformed_auth_configuration_blocks_github_account_resolution() {
 }
 
 #[test]
-fn explain_is_rejected_for_mutating_config_commands() {
+fn dry_run_is_rejected_for_mutating_config_commands() {
     let harness = Harness::new(&[]);
     let output = harness.run(&["-n", "config", "set", "github.auth.auto_switch", "mevanlc"]);
     assert_eq!(output.status.code(), Some(2));
-    assert!(stderr(&output).contains("--explain does not apply"));
+    assert!(stderr(&output).contains("--dry-run does not apply"));
     assert!(!harness.config_file().exists());
 }
 
@@ -2388,7 +2389,7 @@ fn parent_token_variables_do_not_override_auto_switch_lookup() {
 }
 
 #[test]
-fn explain_reports_auto_switch_without_exposing_or_using_the_token() {
+fn dry_run_reports_auto_switch_without_exposing_or_using_the_token() {
     let harness = Harness::new(&["git", "gh"]);
     assert!(
         harness
@@ -2678,22 +2679,24 @@ fn clone_multibyte_short_option_errors_cleanly_without_panicking() {
 }
 
 #[test]
-fn explain_reports_the_exact_plan_without_starting_the_operation() {
-    let harness = Harness::new(&["git", "gh"]);
-    let output = harness.run(&["-n", "clone", "-O", "owner/repo", "--depth=1"]);
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert!(!harness.was_invoked("gh"));
-    assert_eq!(
-        stdout(&output),
-        "repospec: GitHub repository owner/repo\n\
+fn dry_run_reports_the_exact_plan_without_starting_the_operation() {
+    for flag in ["-n", "--dry-run"] {
+        let harness = Harness::new(&["git", "gh"]);
+        let output = harness.run(&[flag, "clone", "-O", "owner/repo", "--depth=1"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(!harness.was_invoked("gh"));
+        assert_eq!(
+            stdout(&output),
+            "repospec: GitHub repository owner/repo\n\
 backend:  gh\n\
 target:   owner--repo\n\
 command:  gh repo clone owner/repo owner--repo -- --depth=1\n"
-    );
+        );
+    }
 }
 
 #[test]
-fn explain_reports_directory_preparation_without_creating_it() {
+fn dry_run_reports_directory_preparation_without_creating_it() {
     let harness = Harness::new(&["git", "gh"]);
     let output = harness.run(&["-n", "clone", "-D", "owner/repo"]);
     assert!(output.status.success(), "{}", stderr(&output));
@@ -2868,10 +2871,10 @@ fn auto_declines_missing_and_mixed_root_evidence_before_installing() {
 }
 
 #[test]
-fn auto_github_api_detection_selects_backend_in_explain_mode() {
+fn auto_github_api_detection_selects_backend_in_dry_run_mode() {
     let harness = Harness::new(&["gh", "cargo"]);
     let output = harness
-        .command(&["--explain", "install", "owner/tool"])
+        .command(&["--dry-run", "install", "owner/tool"])
         .env(
             "DTR_TEST_GITHUB_TREE_JSON",
             r#"{"truncated":false,"tree":[{"path":"Cargo.toml","type":"blob"}]}"#,
@@ -2902,7 +2905,7 @@ fn auto_go_query_inspects_the_base_repository_and_preserves_the_query() {
     let harness = Harness::new(&["gh", "go"]);
     let output = harness
         .command(&[
-            "--explain",
+            "--dry-run",
             "install",
             "https://github.com/yuser/reepo@some-go-stuff",
         ])
@@ -3021,7 +3024,7 @@ fn auto_falls_back_when_github_api_tree_is_truncated_or_malformed() {
     ] {
         let harness = Harness::new(&["gh", "git", "cargo"]);
         let output = harness
-            .command(&["--explain", "install", "owner/tool"])
+            .command(&["--dry-run", "install", "owner/tool"])
             .env("DTR_TEST_GITHUB_TREE_JSON", tree_json)
             .env("DTR_TEST_GIT_TREE_MARKER", "Cargo.toml")
             .output()
@@ -3318,7 +3321,7 @@ fn rust_auto_switch_fails_closed_before_cargo() {
 }
 
 #[test]
-fn rust_auto_switch_explain_is_exact_and_secret_free() {
+fn rust_auto_switch_dry_run_is_exact_and_secret_free() {
     let harness = Harness::new(&["cargo", "gh"]);
     assert!(
         harness
@@ -3588,7 +3591,7 @@ fn python_auto_switch_extends_existing_git_config_and_fails_closed() {
 }
 
 #[test]
-fn python_auto_switch_explain_is_exact_and_secret_free() {
+fn python_auto_switch_dry_run_is_exact_and_secret_free() {
     let harness = Harness::new(&["uv", "gh"]);
     assert!(
         harness
@@ -3832,7 +3835,7 @@ fn npm_auto_switch_fails_closed_before_npm() {
 }
 
 #[test]
-fn npm_auto_switch_explain_is_exact_and_secret_free() {
+fn npm_auto_switch_dry_run_is_exact_and_secret_free() {
     let harness = Harness::new(&["npm", "gh"]);
     assert!(
         harness

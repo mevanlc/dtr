@@ -329,7 +329,7 @@ impl Config {
 
 pub(crate) fn run(
     args: ConfigArgs,
-    explain: bool,
+    dry_run: bool,
     narration_override: Option<bool>,
 ) -> Result<i32, DtrError> {
     match args.command {
@@ -341,11 +341,11 @@ pub(crate) fn run(
                     .map(|config| config.narration())
                     .unwrap_or(true),
             };
-            edit_file(&path, explain, narration)
+            edit_file(&path, dry_run, narration)
         }
         ConfigCommand::List(args) => {
-            if explain {
-                return Err(DtrError::new("--explain does not apply to dtr config"));
+            if dry_run {
+                return Err(DtrError::new("--dry-run does not apply to dtr config"));
             }
             let config = Config::load()?;
             for key in CONFIG_KEYS {
@@ -361,8 +361,8 @@ pub(crate) fn run(
             Ok(0)
         }
         ConfigCommand::Set(args) => {
-            if explain {
-                return Err(DtrError::new("--explain does not apply to dtr config"));
+            if dry_run {
+                return Err(DtrError::new("--dry-run does not apply to dtr config"));
             }
             require_known_key(&args.key)?;
             let path = config_file_path()?;
@@ -380,8 +380,8 @@ pub(crate) fn run(
             Ok(0)
         }
         ConfigCommand::Get(args) => {
-            if explain {
-                return Err(DtrError::new("--explain does not apply to dtr config"));
+            if dry_run {
+                return Err(DtrError::new("--dry-run does not apply to dtr config"));
             }
             require_known_key(&args.key)?;
             let value = Config::load()?.value(&args.key).ok_or_else(|| {
@@ -391,8 +391,8 @@ pub(crate) fn run(
             Ok(0)
         }
         ConfigCommand::Unset(args) => {
-            if explain {
-                return Err(DtrError::new("--explain does not apply to dtr config"));
+            if dry_run {
+                return Err(DtrError::new("--dry-run does not apply to dtr config"));
             }
             require_known_key(&args.key)?;
             let path = config_file_path()?;

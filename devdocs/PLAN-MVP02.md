@@ -1,5 +1,7 @@
 # dtr MVP02 plan
 
+※ The historical `--explain` flag is now named `--dry-run`; `-n` is unchanged.
+
 Status: implemented and validated (2026-07-23)
 
 Roadmap: [dtr first MVP](FIRST-MVP.md), phase 3 of 5

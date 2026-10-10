@@ -11,34 +11,34 @@ The first-MVP feature set is complete in dtr 0.1.0. Its phase-by-phase finish
 line and completion audit are recorded in [devdocs/FIRST-MVP.md](devdocs/FIRST-MVP.md).
 
 ```console
-$ dtr --explain clone --depth 1 -O hjr265/gittop
+$ dtr --dry-run clone --depth 1 -O hjr265/gittop
 repospec: GitHub repository hjr265/gittop
 backend:  gh
 target:   hjr265--gittop
 command:  gh repo clone hjr265/gittop hjr265--gittop -- --depth 1
 
-$ dtr --explain install https://github.com/hjr265/gittop
+$ dtr --dry-run install https://github.com/hjr265/gittop
 repospec: GitHub repository hjr265/gittop
 backend:  go
 command:  go install github.com/hjr265/gittop@latest
 
-$ dtr --explain install --tool cargo hjr265/gittop -- --locked
+$ dtr --dry-run install --tool cargo hjr265/gittop -- --locked
 repospec: GitHub repository hjr265/gittop
 backend:  cargo
 command:  cargo install --git https://github.com/hjr265/gittop.git --locked
 
-$ dtr --explain install --tool uv astral-sh/ruff -- --force
+$ dtr --dry-run install --tool uv astral-sh/ruff -- --force
 repospec: GitHub repository astral-sh/ruff
 backend:  uv
 command:  uv tool install git+https://github.com/astral-sh/ruff.git --force
 
-$ dtr --explain install --tool npm owner/tool -- --force
+$ dtr --dry-run install --tool npm owner/tool -- --force
 repospec: GitHub repository owner/tool
 backend:  npm
 command:  npm install --global --force -- git+https://github.com/owner/tool.git
 
 $ dtr config set github.auth.auto_switch mevanlc,mike-clark-8192
-$ dtr --explain clone mike-clark-8192/foo
+$ dtr --dry-run clone mike-clark-8192/foo
 repospec: GitHub repository mike-clark-8192/foo
 backend:  gh
 auth:     auto-switch to mike-clark-8192 (process-scoped; active gh account unchanged)
@@ -72,8 +72,8 @@ fails immediately with `self-install already in progress`. On Windows, dtr
 renames its running executable to `dtr.exe.old` and waits for the helper. If
 the original path remains missing after the helper exits, dtr restores the
 backup. A successful replacement leaves the backup for cleanup on the next
-non-explain command; the waiting parent preserves the helper's exit status.
-Explain mode does not build the helper or clean up backups. Automatic
+non-dry-run command; the waiting parent preserves the helper's exit status.
+Dry-run mode does not build the helper or clean up backups. Automatic
 trampolining currently applies to local dtr repositories, not remote sources.
 
 Cloning requires Git. Depending on the operation, dtr also uses:
@@ -110,7 +110,7 @@ dtr completion fish > ~/.config/fish/completions/dtr.fish
 ## Clone
 
 ```text
-dtr [--explain|-n] [--narration|--no-narration] clone [options] <dtr-repospec> [dir]
+dtr [--dry-run|-n] [--narration|--no-narration] clone [options] <dtr-repospec> [dir]
 ```
 
 Repository references are classified in a stable order:
@@ -208,7 +208,7 @@ Git configuration and removes inherited `GH_TOKEN` and `GITHUB_TOKEN` from
 installer children. Auto-mode root inspection reuses the same selected token
 through process-scoped `GH_TOKEN` for the GitHub API or the same Git header for
 its fallback. No mode writes the token to disk or includes it in command
-arguments, explain output, or errors.
+arguments, dry-run output, or errors.
 
 An unmatched owner and a bare repository name retain normal active-account
 behavior. If an owner matches the allowlist but its stored token cannot be
@@ -223,7 +223,7 @@ dtr config unset github.auth.auto_switch
 
 `dtr config edit` opens the configuration file directly in the first configured
 or available editor (`DTR_EDITOR`, `VISUAL`, `EDITOR`, `vim`, then `vi`), even
-if the current configuration file is invalid. In explain mode, it prints the
+if the current configuration file is invalid. In dry-run mode, it prints the
 editor command without creating directories or starting it.
 
 Configuration is stored at `<user-home>/.config/dtr/config.toml`.
@@ -243,7 +243,7 @@ checkout is not persistently bound to that identity for later `git fetch` or
 ## Install from a repository
 
 ```text
-dtr [--explain|-n] [--narration|--no-narration] install|i [-a|--add] [-t|--tool <tool>] [--no-latest] [--main] [<dtr-repospec>] [-- <install-arg>...]
+dtr [--dry-run|-n] [--narration|--no-narration] install|i [-a|--add] [-t|--tool <tool>] [--no-latest] [--main] [<dtr-repospec>] [-- <install-arg>...]
 ```
 
 `install` is deliberately repo-oriented. Dtr does not wrap the package-registry
@@ -452,16 +452,16 @@ while Windows paths are stored without a `\\?\` prefix and use `\` separators;
 an automatically selected backend is recorded explicitly so later batch runs
 repeat the same installer choice. When dtr can prove that a Git-based install
 used one stable revision, it also records the full commit and a SHA-256
-fingerprint of the install request. `--explain` reports the file that would be
+fingerprint of the install request. `--dry-run` reports the file that would be
 updated without installing or writing it.
 
 ## Manage an installation kit
 
 ```text
-dtr [--explain|-n] [--narration|--no-narration] kit|k add|a [--no-install] [-t|--tool <tool>] [--no-latest] [--main] [<dtr-repospec>] [-- <install-arg>...]
-dtr [--explain|-n] [--narration|--no-narration] kit|k install|i [-j|--jobs <n|auto>] [-q|--quiet] [--force] [--file <FILE>]
+dtr [--dry-run|-n] [--narration|--no-narration] kit|k add|a [--no-install] [-t|--tool <tool>] [--no-latest] [--main] [<dtr-repospec>] [-- <install-arg>...]
+dtr [--dry-run|-n] [--narration|--no-narration] kit|k install|i [-j|--jobs <n|auto>] [-q|--quiet] [--force] [--file <FILE>]
 dtr kit|k list|ls [--file <FILE>]
-dtr [--explain|-n] kit|k edit|e [--file <FILE>]
+dtr [--dry-run|-n] kit|k edit|e [--file <FILE>]
 ```
 
 `k` is a visible alias for `kit`; within that namespace, `i` aliases `install`,
@@ -473,7 +473,7 @@ is equivalent to `dtr install --add <spec>`. Its repository, tool, Go-version,
 primary-command, and native-argument options match `dtr install`; the repository
 defaults to the current directory. Add `--no-install` to track the repository
 without invoking its installer; `-i`/`--install` states the default explicitly
-and conflicts with `--no-install`. Explain mode reports the kit file without
+and conflicts with `--no-install`. Dry-run mode reports the kit file without
 installing or changing it.
 
 `kit install` reads `<user-home>/.config/dtr/kit.toml` and plans each
@@ -485,7 +485,7 @@ request fingerprint and selected Git commit still match, the entry is reported
 as up to date and skipped. The skip message follows narration settings, so
 `--no-narration` and `-qqq` suppress it, and each skipped entry is reported only
 once in the final ordered replay. `--force` bypasses every cached skip,
-runs the installers, and refreshes the resulting state. Explain mode reports
+runs the installers, and refreshes the resulting state. Dry-run mode reports
 skip decisions without invoking an installer; with `--force`, it prints every
 normal install plan.
 
@@ -504,10 +504,10 @@ They do not turn a successful installer result into a failure. A successful
 install that cannot be tied safely to a commit clears stale state rather than
 risking a false skip.
 
-On the first non-explain operation that uses the default file, dtr silently
+On the first non-dry-run operation that uses the default file, dtr silently
 renames a sibling `install-all.toml` to `kit.toml` when `kit.toml` does not yet
 exist. If both files exist, dtr uses `kit.toml` and leaves `install-all.toml`
-untouched. Explain mode and explicit `--file` paths do not perform this migration.
+untouched. Dry-run mode and explicit `--file` paths do not perform this migration.
 
 `--file FILE` selects an alternate kit TOML file for install, list, or edit.
 `kit list` prints each tracked entry as a shell-safe, reusable
@@ -516,7 +516,7 @@ is not included in that command. `kit edit` launches
 the first configured or available editor in this order:
 `DTR_EDITOR`, `VISUAL`, `EDITOR`, `vim`, then `vi`. Environment-provided editor
 commands may contain quoted arguments, such as `DTR_EDITOR='code --wait'`. Dtr
-creates the containing directory before launching the editor. In explain mode,
+creates the containing directory before launching the editor. In dry-run mode,
 it prints the editor command without creating directories or starting it.
 
 `--jobs N` runs at most that many installs concurrently and requires a positive
@@ -574,7 +574,7 @@ loaded, an entry that cannot be planned, started, or completed emits a warning;
 dtr continues with the remaining entries and exits with status 1 after any such
 failure. Successful entries still refresh their state when another entry fails.
 Native installer output is left visible unless `--quiet` is used. Use
-`dtr --explain kit install` to print the resolved job count and each install or
+`dtr --dry-run kit install` to print the resolved job count and each install or
 skip decision without running an installer.
 Enabled kit-install narration remains visible while jobs run and is replayed in
 configuration order after every build and install has completed. PATH warnings
@@ -627,36 +627,36 @@ opt-out, and use `--narration` to override that setting for one operation. PATH
 warnings remain enabled when narration is disabled. Native child output is never
 suppressed.
 
-## Explain before doing
+## Dry run before doing
 
-Use `-n` or `--explain` to resolve the complete operation without performing it.
+Use `-n` or `--dry-run` to resolve the complete operation without performing it.
 Install, kit, and config subcommands inherit the flag, so it can appear before,
 between, or after their command names:
 
 ```sh
 dtr -n clone -D owner/repo
-dtr --explain install owner/repo
-dtr --explain install --tool cargo owner/repo -- --locked
-dtr --explain install --tool uv owner/repo -- --force
-dtr --explain install --tool npm owner/repo -- --force
+dtr --dry-run install owner/repo
+dtr --dry-run install --tool cargo owner/repo -- --locked
+dtr --dry-run install --tool uv owner/repo -- --force
+dtr --dry-run install --tool npm owner/repo -- --force
 dtr -n kit edit
 dtr kit -n edit
 dtr kit edit -n
 ```
 
-The three kit examples are equivalent; `--explain` and the `k`/`e` aliases work
+The three kit examples are equivalent; `--dry-run` and the `k`/`e` aliases work
 in the same positions. Flags after the installer argument separator `--` are
 passed to the installer.
 
-For clone, put the explain flag before `clone`. Git already uses `clone -n`
+For clone, put the dry-run flag before `clone`. Git already uses `clone -n`
 for `--no-checkout`, so both meanings remain available:
 
 ```sh
-dtr -n clone owner/repo  # explain
+dtr -n clone owner/repo  # dry run
 dtr clone -n owner/repo  # clone without checkout
 ```
 
-Explain mode uses the same typed command plan as execution. It may perform
+Dry-run mode uses the same typed command plan as execution. It may perform
 read-only discovery, such as resolving the current user, querying a forge API,
 or creating and removing an inspection-only temporary Git clone. It never starts
 the resolved clone/install operation or creates its planned target directories.

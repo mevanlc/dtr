@@ -744,7 +744,7 @@ fn quote_bytes(bytes: &[u8]) -> String {
     quoted
 }
 
-pub(crate) fn edit_file(path: &Path, explain: bool, narration: bool) -> Result<i32, DtrError> {
+pub(crate) fn edit_file(path: &Path, dry_run: bool, narration: bool) -> Result<i32, DtrError> {
     let (program, mut arguments) = editor_command()?;
     arguments.push(path.as_os_str().to_os_string());
     let rendered = std::iter::once(program.as_os_str())
@@ -752,7 +752,7 @@ pub(crate) fn edit_file(path: &Path, explain: bool, narration: bool) -> Result<i
         .map(shell_quote_argument)
         .collect::<Vec<_>>()
         .join(" ");
-    if explain {
+    if dry_run {
         println!("command:  {rendered}");
         return Ok(0);
     }

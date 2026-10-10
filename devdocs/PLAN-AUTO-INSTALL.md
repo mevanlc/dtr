@@ -1,5 +1,7 @@
 # dtr automatic install tool selection plan
 
+※ `--explain` has been renamed to `--dry-run`; `-n` is unchanged.
+
 Status: implemented and validated on macOS (2026-07-23; kit follow-up
 2026-08-11); local Go `--main` follow-up validated on Android Termux
 (2026-09-07)
@@ -17,8 +19,8 @@ interface or roadmap status this increment superseded.
 Repository installation now uses one tool-valued option:
 
 ```text
-dtr [--explain|-n] install|i [-a|--add] [-t|--tool <tool>] [--main] [<dtr-repospec>]
-dtr [--explain|-n] install|i [-a|--add] [-t|--tool <tool>] [--main] [<dtr-repospec>] -- <installer-arg>...
+dtr [--dry-run|-n] install|i [-a|--add] [-t|--tool <tool>] [--main] [<dtr-repospec>]
+dtr [--dry-run|-n] install|i [-a|--add] [-t|--tool <tool>] [--main] [<dtr-repospec>] -- <installer-arg>...
 ```
 
 The supported values are `go`, `cargo`, `uv`, `pipx`, `npm`, and `auto`.
@@ -38,9 +40,9 @@ boundary and backend-specific safety checks.
 the collection was managed by the top-level `install-all|ia` command with
 `--list` and `--edit` action flags. The current interface stores the collection
 in `kit.toml` and exposes `dtr kit install`, `dtr kit list`, and `dtr kit edit`
-without compatibility aliases for the former CLI. On first non-explain use of
+without compatibility aliases for the former CLI. On first non-dry-run use of
 the default file, it silently renames `install-all.toml` only when `kit.toml` is
-absent; an existing `kit.toml`, explain mode, and explicit `--file` paths do not
+absent; an existing `kit.toml`, dry-run mode, and explicit `--file` paths do not
 trigger migration.
 
 The current command hierarchy has visible shorthand aliases: `dtr k` for
@@ -53,7 +55,7 @@ storage uses native separators without the `\\?\` prefix. Auto selection is
 replaced by the resolved backend. A new normalized repository is appended, while
 an existing entry for the same repository is silently updated in place. Kit files
 reject multiple entries with the same normalized repository identity. Existing
-file text is preserved. Explain mode reports the target without mutating it;
+file text is preserved. Dry-run mode reports the target without mutating it;
 failed installs are not tracked.
 
 Successful Git-based tracked installs now carry generated `installed` state in
@@ -174,9 +176,9 @@ is removed when discovery finishes.
 If every applicable inspection path fails, dtr reports the discovery failures
 and suggests the explicit tool values instead of guessing.
 
-## Explain and authentication behavior
+## Dry-run and authentication behavior
 
-`--explain` still performs the read-only discovery needed to choose a backend,
+`--dry-run` still performs the read-only discovery needed to choose a backend,
 but does not execute the final installer. Its output retains the existing plan
 shape and names only the selected backend and final command; discovery commands
 are not rendered as additional operations.
@@ -186,7 +188,7 @@ selection is used by GitHub API inspection, filtered Git fallback, and final
 Cargo, uv, pipx, or npm Git fetching. Go retains its established import-path
 installation behavior and receives no dtr-managed Git authentication. No active
 GitHub CLI account or persistent Git configuration is changed, and token-derived
-values remain absent from explain output and diagnostics.
+values remain absent from dry-run output and diagnostics.
 
 ## Implementation map
 

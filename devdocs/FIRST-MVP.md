@@ -1,5 +1,7 @@
 # dtr first MVP roadmap
 
+※ The historical `--explain` flag is now named `--dry-run`; `-n` is unchanged.
+
 Status: complete — 5 of 5 phases complete; automatic install selection was
 delivered as a post-MVP increment (2026-07-23)
 

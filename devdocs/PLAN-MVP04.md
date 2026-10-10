@@ -1,5 +1,7 @@
 # dtr MVP04 plan
 
+※ The historical `--explain` flag is now named `--dry-run`; `-n` is unchanged.
+
 Status: implemented and validated on macOS and Linux (2026-07-23)
 
 Roadmap: [dtr first MVP](FIRST-MVP.md), phase 5 of 5

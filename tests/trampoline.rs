@@ -224,7 +224,7 @@ fn example_reexec_preserves_arguments_directory_environment_and_tracking() {
         if prefix.len() > 1 {
             assert!(harness.directory.path().join("config/kit.toml").is_file());
         }
-        // Completion is a normal non-explain command and triggers backup cleanup.
+        // Completion is a normal non-dry-run command and triggers backup cleanup.
         success(harness.command(&["completion", "bash"]).output().unwrap());
         harness.assert_intact();
     }
@@ -281,13 +281,13 @@ fn kit_failure_after_successful_self_install_preserves_the_replacement() {
 }
 
 #[test]
-fn explain_does_not_build_or_clean_up_backups() {
+fn dry_run_does_not_build_or_clean_up_backups() {
     let harness = Harness::new();
     let backup = harness.binary.with_extension("exe.old");
     fs::write(&backup, "leave untouched").unwrap();
     success(
         harness
-            .command(&["--explain", "install", "--tool", "cargo", "."])
+            .command(&["--dry-run", "install", "--tool", "cargo", "."])
             .output()
             .unwrap(),
     );

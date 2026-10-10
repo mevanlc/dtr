@@ -179,7 +179,7 @@ fn is_false(value: &bool) -> bool {
 
 pub(crate) fn run(
     args: KitArgs,
-    explain: bool,
+    dry_run: bool,
     narration_override: Option<bool>,
 ) -> Result<i32, DtrError> {
     let args = match args.command {
@@ -188,24 +188,24 @@ pub(crate) fn run(
             return run_add(
                 args.into_install_args(),
                 install,
-                explain,
+                dry_run,
                 narration_override,
             );
         }
-        KitCommand::List(args) => return list(&selected_file_path(args.file, !explain)?),
+        KitCommand::List(args) => return list(&selected_file_path(args.file, !dry_run)?),
         KitCommand::Edit(args) => {
-            let path = selected_file_path(args.file, !explain)?;
+            let path = selected_file_path(args.file, !dry_run)?;
             let narration = match narration_override {
                 Some(narration) => narration,
                 None => Config::load_for_runtime()
                     .map(|config| config.narration())
                     .unwrap_or(true),
             };
-            return edit_file(&path, explain, narration);
+            return edit_file(&path, dry_run, narration);
         }
         KitCommand::Install(args) => args,
     };
-    let path = selected_file_path(args.file, !explain)?;
+    let path = selected_file_path(args.file, !dry_run)?;
 
     let config = load_required(&path)?.config;
     let requested_jobs = args.jobs;
@@ -225,7 +225,7 @@ pub(crate) fn run(
     } else {
         Config::default()
     };
-    let narration = if explain || args.quiet >= 3 {
+    let narration = if dry_run || args.quiet >= 3 {
         false
     } else {
         match narration_override {
@@ -233,7 +233,7 @@ pub(crate) fn run(
             None => runtime_config.narration(),
         }
     };
-    let interrupted = if explain {
+    let interrupted = if dry_run {
         None
     } else {
         Some(InterruptState::install_handler()?)
@@ -243,7 +243,7 @@ pub(crate) fn run(
     let mut jobs = Vec::new();
     let mut preflight_results = Vec::new();
 
-    if explain {
+    if dry_run {
         match requested_jobs {
             Jobs::Auto => println!("jobs: {job_count} (auto)"),
             Jobs::Count(_) => println!("jobs: {job_count}"),
@@ -275,7 +275,7 @@ pub(crate) fn run(
             Err(error) => {
                 let warning = entry_warning(number, &repospec, &error);
                 eprintln!("{warning}");
-                if !explain {
+                if !dry_run {
                     preflight_results.push(InstallJobResult {
                         number,
                         succeeded: false,
@@ -288,7 +288,7 @@ pub(crate) fn run(
             }
         };
 
-        let before_revision = if explain && force {
+        let before_revision = if dry_run && force {
             None
         } else {
             match probe_install_revision(&plan) {
@@ -296,7 +296,7 @@ pub(crate) fn run(
                 Err(error) => {
                     let warning = cache_warning(number, &repospec, &error);
                     eprintln!("{warning}");
-                    if !explain {
+                    if !dry_run {
                         preflight_results.push(InstallJobResult {
                             number,
                             succeeded: true,
@@ -318,7 +318,7 @@ pub(crate) fn run(
                     })
             });
 
-        if explain {
+        if dry_run {
             println!();
             println!("kit entry {number}:");
             if cached {
@@ -362,7 +362,7 @@ pub(crate) fn run(
         });
     }
 
-    if !explain {
+    if !dry_run {
         if let Some(self_job) = jobs
             .iter()
             .find(|job| self_rebuild::is_self_install_entry(&job.entry))
@@ -398,14 +398,14 @@ pub(crate) fn run(
 fn run_add(
     args: InstallArgs,
     install: bool,
-    explain: bool,
+    dry_run: bool,
     narration_override: Option<bool>,
 ) -> Result<i32, DtrError> {
     if install {
-        return run_install_and_add(args, explain, narration_override);
+        return run_install_and_add(args, dry_run, narration_override);
     }
 
-    let path = if explain {
+    let path = if dry_run {
         config::kit_file_path()?
     } else {
         config::migrate_legacy_kit_file()?
@@ -414,7 +414,7 @@ fn run_add(
     let home = home::home_dir();
     let (entry, local_path) = InstallEntry::from_install_args(&args, home.as_deref())?;
 
-    if explain {
+    if dry_run {
         println!("track:    {}", display_path(&path));
         return Ok(0);
     }
@@ -437,10 +437,10 @@ fn run_add(
 
 pub(crate) fn run_install_and_add(
     args: InstallArgs,
-    explain: bool,
+    dry_run: bool,
     narration_override: Option<bool>,
 ) -> Result<i32, DtrError> {
-    let path = if explain {
+    let path = if dry_run {
         config::kit_file_path()?
     } else {
         config::migrate_legacy_kit_file()?
@@ -453,7 +453,7 @@ pub(crate) fn run_install_and_add(
         entry.tool = backend_tool(plan.backend)?;
     }
 
-    if explain {
+    if dry_run {
         plan.explain();
         println!("track:    {}", display_path(&path));
         return Ok(0);

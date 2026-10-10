@@ -15,9 +15,9 @@ use serde::{Deserialize, Serialize};
     long_about = "Resolve the repository reference you already have and invoke the right underlying tool."
 )]
 pub(crate) struct Cli {
-    /// Explain the fully resolved operation without performing it
+    /// Show the fully resolved operation without performing it
     #[arg(short = 'n', long, global = true)]
-    pub(crate) explain: bool,
+    pub(crate) dry_run: bool,
 
     /// Print dtr's execution narration
     #[arg(long, global = true, conflicts_with = "no_narration")]
@@ -65,7 +65,7 @@ pub(crate) struct CompletionArgs {
 // Override the inherited argument to keep clone's -n available to Git.
 #[command(
     trailing_var_arg = true,
-    arg(clap::Arg::new("explain").long("explain").action(ArgAction::SetTrue))
+    arg(clap::Arg::new("dry_run").long("dry-run").action(ArgAction::SetTrue))
 )]
 pub(crate) struct CloneArgs {
     /// dtr clone options, git clone options, repository, and optional directory
@@ -329,11 +329,17 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
-    fn explain_is_inherited_at_every_subcommand_level() {
-        let cli = Cli::try_parse_from(["dtr", "-n", "clone", "owner/repo"]).expect("valid command");
-        assert!(cli.explain);
+    fn dry_run_is_inherited_at_every_subcommand_level() {
+        for arguments in [
+            ["dtr", "-n", "clone", "owner/repo"],
+            ["dtr", "--dry-run", "clone", "owner/repo"],
+            ["dtr", "clone", "--dry-run", "owner/repo"],
+        ] {
+            let cli = Cli::try_parse_from(arguments).expect("valid command");
+            assert!(cli.dry_run, "{arguments:?}");
+        }
 
-        for flag in ["-n", "--explain"] {
+        for flag in ["-n", "--dry-run"] {
             for command in [
                 ["install", "owner/repo"],
                 ["kit", "edit"],
@@ -344,20 +350,20 @@ mod tests {
                     let mut arguments = vec!["dtr"];
                     arguments.extend(command);
                     arguments.insert(position + 1, flag);
-                    let cli = Cli::try_parse_from(&arguments).expect("valid explain command");
-                    assert!(cli.explain, "{arguments:?}");
+                    let cli = Cli::try_parse_from(&arguments).expect("valid dry-run command");
+                    assert!(cli.dry_run, "{arguments:?}");
                 }
             }
         }
     }
 
     #[test]
-    fn explain_flags_after_the_separator_are_native_installer_arguments() {
+    fn dry_run_flags_after_the_separator_are_native_installer_arguments() {
         for command in [vec!["dtr", "install"], vec!["dtr", "kit", "add"]] {
             let mut arguments = command;
-            arguments.extend(["owner/repo", "--", "-n", "--explain"]);
+            arguments.extend(["owner/repo", "--", "-n", "--dry-run"]);
             let cli = Cli::try_parse_from(arguments).expect("valid native installer arguments");
-            assert!(!cli.explain);
+            assert!(!cli.dry_run);
             let install_args = match cli.command {
                 DtrCommand::Install(args) => args.install_args,
                 DtrCommand::Kit(KitArgs {
@@ -365,7 +371,7 @@ mod tests {
                 }) => args.install_args,
                 _ => panic!("expected install or kit add command"),
             };
-            assert_eq!(install_args, ["-n", "--explain"].map(OsString::from));
+            assert_eq!(install_args, ["-n", "--dry-run"].map(OsString::from));
         }
     }
 

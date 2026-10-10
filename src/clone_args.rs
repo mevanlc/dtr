@@ -5,7 +5,7 @@ use std::process::Command;
 use crate::error::DtrError;
 use crate::repospec::RepoSpec;
 
-pub(crate) const HELP: &str = r#"Usage: dtr [--explain|-n] clone [options] <dtr-repospec> [dir]
+pub(crate) const HELP: &str = r#"Usage: dtr [--dry-run|-n] clone [options] <dtr-repospec> [dir]
 
 Clone a local or remote repository using git, gh, or glab.
 
@@ -17,7 +17,7 @@ dtr options:
   -h, --help        print help
 
 Recognized git clone options may appear in normal git-clone positions.
-Use `dtr -n clone ...` to explain; `dtr clone -n ...` means git --no-checkout.
+Use `dtr -n clone ...` to preview; `dtr clone -n ...` means git --no-checkout.
 "#;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

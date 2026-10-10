@@ -34,13 +34,13 @@ pub fn main_entry() -> i32 {
 
 fn run() -> Result<i32, DtrError> {
     let Cli {
-        explain,
+        dry_run,
         narration,
         no_narration,
         command,
     } = Cli::parse();
 
-    if !explain {
+    if !dry_run {
         self_rebuild::sweep_stale_old_binary();
     }
 
@@ -54,8 +54,8 @@ fn run() -> Result<i32, DtrError> {
 
     let plan = match command {
         DtrCommand::Completion(args) => {
-            if explain {
-                return Err(DtrError::new("--explain does not apply to dtr completion"));
+            if dry_run {
+                return Err(DtrError::new("--dry-run does not apply to dtr completion"));
             }
             let mut command = Cli::command();
             let binary_name = command.get_name().to_owned();
@@ -78,10 +78,10 @@ fn run() -> Result<i32, DtrError> {
             ParsedClone::Request(request) => plan_clone(*request)?,
         },
         DtrCommand::Install(args) if args.add => {
-            return kit::run_install_and_add(args, explain, narration_override);
+            return kit::run_install_and_add(args, dry_run, narration_override);
         }
         DtrCommand::Install(args) => {
-            if !explain
+            if !dry_run
                 && let home = home::home_dir()
                 && let Ok((entry, _)) = kit::InstallEntry::from_install_args(&args, home.as_deref())
                 && self_rebuild::is_self_install_entry(&entry)
@@ -93,14 +93,14 @@ fn run() -> Result<i32, DtrError> {
             plan_install(args)?
         }
         DtrCommand::Kit(args) => {
-            return kit::run(args, explain, narration_override);
+            return kit::run(args, dry_run, narration_override);
         }
         DtrCommand::Config(args) => {
-            return config::run(args, explain, narration_override);
+            return config::run(args, dry_run, narration_override);
         }
     };
 
-    if explain {
+    if dry_run {
         plan.explain();
         Ok(0)
     } else {
