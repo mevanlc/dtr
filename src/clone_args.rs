@@ -15,6 +15,11 @@ dtr options:
   -U, --upstream-remote-name NAME
                     name the upstream remote created by gh
   -h, --help        print help
+      --dry-run     show the resolved operation without cloning
+  -q, --quiet       less output; repeat for warnings and failures only
+  -v, --verbose     more output; repeat for resolution and cache decisions
+
+Verbosity counts cancel and apply to dtr, including after the repository.
 
 Recognized git clone options may appear in normal git-clone positions.
 Use `dtr -n clone ...` to preview; `dtr clone -n ...` means git --no-checkout.
@@ -46,7 +51,10 @@ struct GitOptionTable {
     arity: HashMap<String, bool>,
 }
 
-pub(crate) fn parse_clone_args(argv: Vec<OsString>) -> Result<ParsedClone, DtrError> {
+pub(crate) fn parse_clone_args(
+    argv: Vec<OsString>,
+    adjustment: &mut i32,
+) -> Result<ParsedClone, DtrError> {
     if help_requested(&argv) {
         return Ok(ParsedClone::Help);
     }
@@ -79,6 +87,30 @@ pub(crate) fn parse_clone_args(argv: Vec<OsString>) -> Result<ParsedClone, DtrEr
         }
 
         match argument.to_str() {
+            Some("--quiet") => {
+                *adjustment -= 1;
+                index += 1;
+            }
+            Some("--verbose") => {
+                *adjustment += 1;
+                index += 1;
+            }
+            Some(text) if text.starts_with("--quiet=") || text.starts_with("--verbose=") => {
+                return Err(DtrError::new(
+                    "--quiet and --verbose take no value; repeat them to adjust verbosity",
+                ));
+            }
+            Some(text)
+                if text.starts_with('-')
+                    && text.len() > 1
+                    && !text.starts_with("--")
+                    && text[1..].chars().all(|c| matches!(c, 'q' | 'v')) =>
+            {
+                for character in text[1..].chars() {
+                    *adjustment += if character == 'v' { 1 } else { -1 };
+                }
+                index += 1;
+            }
             Some("-O" | "--name-owner") => {
                 if name_mode == NameMode::OwnerDirectory {
                     return Err(DtrError::new(
@@ -136,7 +168,30 @@ pub(crate) fn parse_clone_args(argv: Vec<OsString>) -> Result<ParsedClone, DtrEr
                 index += 1;
             }
             Some(text) if text.starts_with('-') && text != "-" => {
-                let consumed = table.parse_option(&argv, index, &mut git_options)?;
+                let mut parsed = Vec::new();
+                let consumed = table.parse_option(&argv, index, &mut parsed)?;
+                // Split boolean Git clusters without interpreting attached values
+                // such as -bfeature-qv as dtr options.
+                if text.starts_with('-')
+                    && !text.starts_with("--")
+                    && text[1..]
+                        .chars()
+                        .all(|c| table.arity.get(&format!("-{c}")) == Some(&false))
+                {
+                    let mut native = String::from("-");
+                    for c in text[1..].chars() {
+                        match c {
+                            'q' => *adjustment -= 1,
+                            'v' => *adjustment += 1,
+                            c => native.push(c),
+                        }
+                    }
+                    if native.len() > 1 {
+                        git_options.push(native.into());
+                    }
+                } else {
+                    git_options.extend(parsed);
+                }
                 index += consumed;
             }
             _ => {

@@ -558,30 +558,30 @@ fn config_set_get_and_unset_round_trip_the_auto_switch_allowlist() {
 }
 
 #[test]
-fn config_set_get_list_and_unset_round_trip_narration() {
+fn config_set_get_list_and_unset_round_trip_verbosity() {
     let harness = Harness::new(&[]);
-    let set = harness.run(&["config", "set", "narration", "false"]);
+    let set = harness.run(&["config", "set", "verbosity", "-1"]);
     assert!(set.status.success(), "{}", stderr(&set));
     assert_eq!(
         fs::read_to_string(harness.config_file()).unwrap(),
-        "narration = false\n"
+        "verbosity = -1\n"
     );
 
-    let get = harness.run(&["config", "get", "narration"]);
+    let get = harness.run(&["config", "get", "verbosity"]);
     assert!(get.status.success(), "{}", stderr(&get));
-    assert_eq!(stdout(&get), "false\n");
+    assert_eq!(stdout(&get), "-1\n");
 
     let list = harness.run(&["config", "list"]);
     assert!(list.status.success(), "{}", stderr(&list));
-    assert_eq!(stdout(&list), "narration=false\n");
+    assert_eq!(stdout(&list), "verbosity=-1\n");
 
-    let invalid = harness.run(&["config", "set", "narration", "yes"]);
+    let invalid = harness.run(&["config", "set", "verbosity", "yes"]);
     assert_eq!(invalid.status.code(), Some(2));
-    assert!(stderr(&invalid).contains("narration must be true or false"));
+    assert!(stderr(&invalid).contains("verbosity must be an integer from -2 to 2"));
 
-    let unset = harness.run(&["config", "unset", "narration"]);
+    let unset = harness.run(&["config", "unset", "verbosity"]);
     assert!(unset.status.success(), "{}", stderr(&unset));
-    let get = harness.run(&["config", "get", "narration"]);
+    let get = harness.run(&["config", "get", "verbosity"]);
     assert_eq!(get.status.code(), Some(2));
     assert!(stderr(&get).contains("is not set"));
 }
@@ -789,25 +789,22 @@ fn config_edit_prefers_visual_over_editor() {
 }
 
 #[test]
-fn config_edit_honors_narration_preference_and_cli_overrides() {
+fn config_edit_honors_verbosity_preference_and_cli_overrides() {
     let harness = Harness::new(&["vim"]);
     let output = harness
-        .command(&["--no-narration", "config", "edit"])
+        .command(&["-qq", "config", "edit"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(!stderr(&output).contains('→'));
 
-    let output = harness
-        .command(&["--narration", "config", "edit"])
-        .output()
-        .unwrap();
+    let output = harness.command(&["-v", "config", "edit"]).output().unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(stderr(&output).contains("→ vim"));
 
     let harness_invalid = Harness::new(&["vim"]);
     harness_invalid.write_config("invalid toml = [");
-    let output = harness_invalid.run(&["config", "edit"]);
+    let output = harness_invalid.run(&["config", "edit", "-v"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(stderr(&output).contains("→ vim"));
 }
@@ -842,10 +839,12 @@ fn completion_generates_scripts_for_supported_shells() {
     let harness = Harness::new(&[]);
 
     for shell in ["bash", "elvish", "fish", "powershell", "zsh"] {
-        let output = harness.run(&["completion", shell]);
+        let output = harness.run(&["completion", "-qq", shell]);
         assert!(output.status.success(), "{shell}: {}", stderr(&output));
         assert!(stdout(&output).contains("dtr"), "{shell}");
         assert!(stdout(&output).contains("dry-run"), "{shell}");
+        assert!(stdout(&output).contains("quiet"), "{shell}");
+        assert!(stdout(&output).contains("verbose"), "{shell}");
         assert_eq!(stderr(&output), "", "{shell}");
     }
 }
@@ -1019,6 +1018,10 @@ fn local_git_installs_record_clean_commits_skip_and_force() {
         "{}",
         stderr(&cached_verbose)
     );
+    let cached_debug = harness.run(&["kit", "install", "-vv"]);
+    assert!(cached_debug.status.success(), "{}", stderr(&cached_debug));
+    assert!(stderr(&cached_debug).contains("revision and install request match; skipping"));
+    assert!(!harness.was_invoked("cargo"));
 
     let edited = fs::read_to_string(harness.kit_file()).unwrap().replace(
         "tool = \"cargo\"\n",
@@ -1263,7 +1266,7 @@ fn remote_git_head_is_recorded_and_skipped_when_unchanged() {
         .output()
         .unwrap();
     assert!(dry_run.status.success(), "{}", stderr(&dry_run));
-    assert!(stdout(&dry_run).contains("skip:"), "{}", stdout(&dry_run));
+    assert_eq!(stdout(&dry_run), "");
     assert!(!harness.was_invoked("cargo"));
 
     let failed_probe = harness
@@ -1390,33 +1393,124 @@ fn kit_warns_and_continues_after_an_entry_cannot_be_planned() {
 }
 
 #[test]
-fn kit_dry_run_prints_every_plan_without_running_installers() {
-    let harness = Harness::new(&["cargo"]);
+fn kit_dry_run_lists_entries_one_per_line_without_running_installers() {
+    let harness = Harness::new(&["cargo", "go"]);
     let cargo_repo = harness.work.join("ripgrep");
     fs::create_dir_all(&cargo_repo).unwrap();
+    let go_repo = harness.local_repository("go tool", &["go.mod"], &[]);
     harness.write_kit(&format!(
         r#"
             [[install]]
             repospec = {cargo_repo:?}
             tool = "cargo"
             args = ["--force", "--features", "pcre2"]
+
+            [[install]]
+            repospec = {go_repo:?}
+            tool = "go"
         "#,
         cargo_repo = cargo_repo.display().to_string(),
     ));
 
-    let output = harness.run(&["--dry-run", "kit", "install", "--jobs", "3"]);
-    assert!(output.status.success(), "{}", stderr(&output));
-    let output_text = stdout(&output);
-    assert!(output_text.starts_with("jobs: 3\n\n"), "{output_text}");
-    assert!(output_text.contains("kit entry 1:"), "{output_text}");
+    let expected = format!(
+        "install: {} (cargo)\ninstall: {go_repo} (go)\n",
+        cargo_repo.display()
+    );
+    for flags in [vec![], vec!["-q"], vec!["-qq"], vec!["-v", "-q"]] {
+        let mut arguments = vec!["kit", "install", "-n", "--jobs", "3"];
+        arguments.extend(flags);
+        let output = harness.run(&arguments);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(stdout(&output), expected);
+        assert_eq!(stderr(&output), "");
+    }
+
+    let verbose = harness.run(&["kit", "install", "-n", "-v", "--jobs", "3"]);
+    assert!(verbose.status.success(), "{}", stderr(&verbose));
+    assert_eq!(stdout(&verbose), expected);
+    let diagnostics = stderr(&verbose);
+    assert!(diagnostics.starts_with("jobs: 3\n"), "{diagnostics}");
     assert!(
-        output_text.contains(&format!(
-            "command:  cargo install --path {} --force --features pcre2",
+        diagnostics.contains(&format!(
+            "→ cargo install --path {} --force --features pcre2",
             cargo_repo.display()
         )),
-        "{output_text}"
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains(&format!(
+            "→ go install ./... (in '{}')",
+            fs::canonicalize(harness.work.join("go tool"))
+                .unwrap()
+                .display()
+        )),
+        "{diagnostics}"
     );
     assert!(!harness.was_invoked("cargo"));
+    assert!(!harness.was_invoked("go"));
+}
+
+#[test]
+fn kit_dry_run_omits_cached_entries_until_verbose_and_force_lists_them() {
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+    let harness = Harness::new(&["cargo", "git", "uv"]);
+    harness.write_kit(
+        "[[install]]\nrepospec = \"owner/cached\"\ntool = \"cargo\"\n\n\
+         [[install]]\nrepospec = \"owner/changed\"\ntool = \"cargo\"\n",
+    );
+    let remote = format!("{COMMIT}\tHEAD\n");
+    let installed = harness
+        .command(&["kit", "install"])
+        .env("DTR_TEST_GIT_LS_REMOTE_OUTPUT", &remote)
+        .output()
+        .unwrap();
+    assert!(installed.status.success(), "{}", stderr(&installed));
+    fs::remove_file(harness.log.join("cargo")).unwrap();
+
+    let mut kit = fs::read_to_string(harness.kit_file()).unwrap().replace(
+        "repospec = \"owner/changed\"\n",
+        "repospec = \"owner/changed\"\nargs = [\"--locked\"]\n",
+    );
+    kit.push_str("\n[[install]]\nrepospec = \"owner/new\"\ntool = \"uv\"\n");
+    harness.write_kit(&kit);
+    let actionable = "install: owner/changed (cargo)\ninstall: owner/new (uv)\n";
+    for (flags, verbose) in [
+        (vec![], false),
+        (vec!["-qq"], false),
+        (vec!["-v", "-q"], false),
+        (vec!["-v"], true),
+        (vec!["-vvq"], true),
+        (vec!["-vv"], true),
+    ] {
+        let mut arguments = vec!["kit", "install", "-n"];
+        arguments.extend(flags);
+        let output = harness
+            .command(&arguments)
+            .env("DTR_TEST_GIT_LS_REMOTE_OUTPUT", &remote)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let expected = if verbose {
+            format!(
+                "skip: owner/cached @ {} (already installed)\n{actionable}",
+                &COMMIT[..12]
+            )
+        } else {
+            actionable.to_owned()
+        };
+        assert_eq!(stdout(&output), expected);
+    }
+
+    let forced = harness.run(&["kit", "install", "-n", "--force"]);
+    assert!(forced.status.success(), "{}", stderr(&forced));
+    assert_eq!(
+        stdout(&forced),
+        format!("install: owner/cached (cargo)\n{actionable}")
+    );
+    assert_eq!(stderr(&forced), "");
+    assert!(!harness.was_invoked("cargo"));
+    assert!(!harness.was_invoked("uv"));
+    assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), kit);
 }
 
 #[test]
@@ -1447,7 +1541,7 @@ fn kit_jobs_runs_multiple_installers_concurrently() {
 }
 
 #[test]
-fn kit_replays_narration_after_all_native_child_output() {
+fn kit_replays_verbosity_after_all_native_child_output() {
     let harness = Harness::new(&["cargo"]);
     harness.write_kit(
         r#"
@@ -1462,7 +1556,7 @@ fn kit_replays_narration_after_all_native_child_output() {
     );
 
     let output = harness
-        .command(&["kit", "install", "--jobs", "2"])
+        .command(&["kit", "install", "--jobs", "2", "-v"])
         .env("DTR_TEST_CHILD_STDERR", "native child output")
         .output()
         .unwrap();
@@ -1484,10 +1578,12 @@ fn kit_replays_narration_after_all_native_child_output() {
         "{stderr}"
     );
     assert!(
-        stderr.ends_with(
-            "→ cargo install --path ./one\n\
-             → cargo install --path ./two\n"
-        ),
+        stderr.rfind("→ cargo install --path ./one").unwrap()
+            < stderr.rfind("→ cargo install --path ./two").unwrap(),
+        "{stderr}"
+    );
+    assert!(
+        stderr.ends_with("installed: local repository ./two (cargo)\n"),
         "{stderr}"
     );
     assert!(
@@ -1508,10 +1604,10 @@ fn kit_quiet_levels_suppress_only_the_requested_native_output() {
         "#,
     );
 
-    for (quiet, expect_stdout, expect_stderr, expect_narration) in [
+    for (quiet, expect_stdout, expect_stderr, expect_verbosity) in [
         (&[][..], true, true, true),
-        (&["-q"][..], false, true, true),
-        (&["-qq"][..], false, false, true),
+        (&["-q"][..], false, false, true),
+        (&["-qq"][..], false, false, false),
         (&["-qqq"][..], false, false, false),
     ] {
         let mut arguments = vec!["kit", "install"];
@@ -1536,8 +1632,8 @@ fn kit_quiet_levels_suppress_only_the_requested_native_output() {
             "quiet arguments: {quiet:?}; stderr: {stderr}"
         );
         assert_eq!(
-            stderr.contains("→ cargo install --path ./tool"),
-            expect_narration,
+            stderr.contains("installed: local repository ./tool (cargo)"),
+            expect_verbosity,
             "quiet arguments: {quiet:?}; stderr: {stderr}"
         );
     }
@@ -1551,15 +1647,13 @@ fn kit_quiet_levels_suppress_only_the_requested_native_output() {
         .unwrap();
     assert_eq!(failed.status.code(), Some(1));
     assert_eq!(stdout(&failed), "");
-    assert_eq!(
-        stderr(&failed),
-        "dtr: warning: kit entry 1 (\"./tool\") exited with status 9\n\
-         dtr: warning: kit entry 1 (\"./tool\") exited with status 9\n"
-    );
+    assert!(stderr(&failed).contains("native child stdout"));
+    assert!(stderr(&failed).contains("native child stderr"));
+    assert!(stderr(&failed).contains("exited with status 9"));
 }
 
 #[test]
-fn kit_replays_path_warnings_when_narration_is_disabled() {
+fn kit_replays_path_warnings_when_verbosity_is_disabled() {
     let harness = Harness::new(&["go"]);
     let install_directory = harness.work.join("go-bin");
     fs::create_dir(&install_directory).unwrap();
@@ -1575,7 +1669,7 @@ fn kit_replays_path_warnings_when_narration_is_disabled() {
     );
 
     let output = harness
-        .command(&["--no-narration", "kit", "install"])
+        .command(&["-qq", "kit", "install"])
         .env("PATH", path)
         .env("DTR_TEST_GO_GOBIN", &install_directory)
         .env("DTR_TEST_CHILD_STDERR", "native child output")
@@ -1611,7 +1705,7 @@ fn kit_ctrl_c_allows_started_jobs_to_finish_then_replays_and_exits_130() {
         "#,
     );
 
-    let mut command = harness.command(&["kit", "install", "--jobs", "1"]);
+    let mut command = harness.command(&["kit", "install", "--jobs", "1", "-v"]);
     command
         .env("DTR_TEST_CHILD_STDERR", "native child output")
         .env(
@@ -1666,10 +1760,14 @@ fn kit_ctrl_c_allows_started_jobs_to_finish_then_replays_and_exits_130() {
         "{stderr}"
     );
     assert!(
-        stderr.ends_with(
-            "→ cargo install --path ./finished\n\
-             → npm install --global -- ./finishing\n"
-        ),
+        stderr.rfind("→ cargo install --path ./finished").unwrap()
+            < stderr
+                .rfind("→ npm install --global -- ./finishing")
+                .unwrap(),
+        "{stderr}"
+    );
+    assert!(
+        stderr.ends_with("installed: local repository ./finishing (npm)\n"),
         "{stderr}"
     );
     assert_eq!(
@@ -1698,7 +1796,7 @@ fn kit_second_ctrl_c_terminates_active_child_groups_and_exits_130() {
         "#,
     );
 
-    let mut command = harness.command(&["kit", "install", "--jobs", "1"]);
+    let mut command = harness.command(&["kit", "install", "--jobs", "1", "-v"]);
     command
         .env("DTR_TEST_INTERRUPT_PROGRAM", "npm")
         .env("DTR_TEST_CHILD_STDERR", "native child output")
@@ -1854,7 +1952,7 @@ tool = "go"
 fn install_add_silently_replaces_the_entry_for_the_same_repository() {
     let harness = Harness::new(&["cargo"]);
     let first = harness.run(&[
-        "--no-narration",
+        "-qq",
         "i",
         "-at",
         "cargo",
@@ -1869,7 +1967,7 @@ fn install_add_silently_replaces_the_entry_for_the_same_repository() {
     fs::write(harness.kit_file(), with_comment).unwrap();
 
     let second = harness.run(&[
-        "--no-narration",
+        "-qq",
         "i",
         "-at",
         "cargo",
@@ -2200,9 +2298,9 @@ fn github_clone_prefers_gh_and_forwards_flexible_git_options() {
 }
 
 #[test]
-fn clone_narration_echoes_the_command_and_prints_only_the_absolute_target() {
+fn clone_verbosity_echoes_the_command_and_prints_only_the_absolute_target() {
     let harness = Harness::new(&["git", "gh"]);
-    let output = harness.run(&["clone", "owner/repo", "destination"]);
+    let output = harness.run(&["clone", "-v", "owner/repo", "destination"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         stdout(&output),
@@ -2216,15 +2314,15 @@ fn clone_narration_echoes_the_command_and_prints_only_the_absolute_target() {
                 .display()
         )
     );
-    assert_eq!(stderr(&output), "→ gh repo clone owner/repo destination\n");
+    assert!(stderr(&output).contains("→ gh repo clone owner/repo destination\n"));
 }
 
 #[test]
-fn narration_config_and_cli_overrides_have_the_expected_precedence() {
+fn verbosity_config_and_cli_overrides_have_the_expected_precedence() {
     let harness = Harness::new(&["git", "gh"]);
     assert!(
         harness
-            .run(&["config", "set", "narration", "false"])
+            .run(&["config", "set", "verbosity", "-1"])
             .status
             .success()
     );
@@ -2235,10 +2333,10 @@ fn narration_config_and_cli_overrides_have_the_expected_precedence() {
         "{}",
         stderr(&configured_off)
     );
-    assert_eq!(stdout(&configured_off), "");
+    assert!(stdout(&configured_off).ends_with("/configured-off\n"));
     assert_eq!(stderr(&configured_off), "");
 
-    let opted_in = harness.run(&["--narration", "clone", "owner/repo", "opted-in"]);
+    let opted_in = harness.run(&["-vv", "clone", "owner/repo", "opted-in"]);
     assert!(opted_in.status.success(), "{}", stderr(&opted_in));
     assert_eq!(
         stdout(&opted_in),
@@ -2252,13 +2350,155 @@ fn narration_config_and_cli_overrides_have_the_expected_precedence() {
                 .display()
         )
     );
-    assert!(stderr(&opted_in).starts_with("→ gh repo clone"));
+    assert!(stderr(&opted_in).contains("→ gh repo clone"));
 
     let fresh = Harness::new(&["git", "gh"]);
-    let opted_out = fresh.run(&["--no-narration", "clone", "owner/repo", "opted-out"]);
+    let opted_out = fresh.run(&["-qq", "clone", "owner/repo", "opted-out"]);
     assert!(opted_out.status.success(), "{}", stderr(&opted_out));
-    assert_eq!(stdout(&opted_out), "");
+    assert!(stdout(&opted_out).ends_with("/opted-out\n"));
     assert_eq!(stderr(&opted_out), "");
+}
+
+#[test]
+fn install_verbosity_levels_control_progress_results_commands_and_diagnostics() {
+    let harness = Harness::new(&["cargo"]);
+    for (flags, level) in [
+        (vec!["-qq"], -2),
+        (vec!["-q"], -1),
+        (vec![], 0),
+        (vec!["-v"], 1),
+        (vec!["-vv"], 2),
+        (vec!["-qqqq", "-vvv"], -1),
+        (vec!["-vvv", "-qqqq"], -1),
+        (vec!["--quiet", "--verbose"], 0),
+    ] {
+        let mut args = vec!["install", "--tool", "cargo", "./tool"];
+        args.extend(flags);
+        let output = harness
+            .command(&args)
+            .env("DTR_TEST_CHILD_STDOUT", "native stdout")
+            .env("DTR_TEST_CHILD_STDERR", "native stderr")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let err = stderr(&output);
+        assert_eq!(
+            stdout(&output).contains("native stdout"),
+            level >= 0,
+            "{args:?}"
+        );
+        assert_eq!(err.contains("native stderr"), level >= 0, "{args:?}: {err}");
+        assert_eq!(err.contains("installing:"), level >= 0, "{args:?}: {err}");
+        assert_eq!(err.contains("installed:"), level >= -1, "{args:?}: {err}");
+        assert_eq!(
+            err.contains("→ cargo install"),
+            level >= 1,
+            "{args:?}: {err}"
+        );
+        assert_eq!(
+            err.contains("selected install backend cargo"),
+            level >= 2,
+            "{args:?}: {err}"
+        );
+    }
+}
+
+#[test]
+fn clone_verbosity_counts_cancel_across_positions_and_preserve_native_values() {
+    let harness = Harness::new(&["git", "gh"]);
+    for args in [
+        vec!["-q", "clone", "owner/repo", "-v"],
+        vec!["clone", "-q", "owner/repo", "-v"],
+        vec!["clone", "owner/repo", "--quiet", "--verbose"],
+        vec!["clone", "-qqn", "owner/repo", "-vv"],
+        vec!["clone", "-nqq", "owner/repo", "-vv"],
+        vec!["clone", "--branch", "-q", "owner/repo"],
+        vec!["clone", "-bquiet-v", "owner/repo"],
+    ] {
+        let output = harness.run(&args);
+        assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+        assert!(
+            stderr(&output).contains("cloning:"),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            !stderr(&output).contains("→"),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(stdout(&output).ends_with("/repo\n"));
+    }
+    let output = harness.run(&["clone", "owner/repo", "-qq"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).ends_with("/repo\n"));
+    assert_eq!(stderr(&output), "");
+    assert_eq!(
+        harness.invocation("gh").args,
+        ["repo", "clone", "owner/repo"]
+    );
+    for args in [
+        vec!["clone", "--", "owner/repo", "-q"],
+        vec!["clone", "owner/repo", "--", "-q"],
+    ] {
+        let output = harness.run(&args);
+        assert!(output.status.success(), "{args:?}: {}", stderr(&output));
+        assert!(
+            stdout(&output).ends_with("/-q\n"),
+            "{args:?}: {}",
+            stdout(&output)
+        );
+        assert!(stderr(&output).contains("cloning:"));
+    }
+}
+
+#[test]
+fn quiet_failures_reveal_both_child_streams_on_stderr_and_preserve_exit_status() {
+    let harness = Harness::new(&["cargo", "git", "gh"]);
+    for args in [
+        vec!["install", "-q", "--tool", "cargo", "./tool"],
+        vec!["install", "-qq", "--tool", "cargo", "./tool"],
+        vec!["clone", "owner/repo", "-qq"],
+    ] {
+        let output = harness
+            .command(&args)
+            .env("DTR_TEST_CHILD_STDOUT", "failure on stdout")
+            .env("DTR_TEST_CHILD_STDERR", "failure on stderr")
+            .env("DTR_TEST_EXIT", "9")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(9), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "");
+        assert!(stderr(&output).contains("failure on stdout"));
+        assert!(stderr(&output).contains("failure on stderr"));
+        assert!(stderr(&output).contains("exited with status 9"));
+    }
+}
+
+#[test]
+fn verbosity_preserves_dry_run_results_and_native_installer_arguments() {
+    let harness = Harness::new(&["cargo"]);
+    let output = harness.run(&[
+        "-qq", "install", "-n", "--tool", "cargo", "./tool", "--", "-vv",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("command:  cargo install --path ./tool -vv"));
+    assert_eq!(stderr(&output), "");
+    assert!(!harness.was_invoked("cargo"));
+}
+
+#[test]
+fn very_verbose_auto_install_explains_manifest_detection() {
+    let harness = Harness::new(&["cargo"]);
+    fs::write(
+        harness.work.join("Cargo.toml"),
+        "[package]\nname = 'tool'\n",
+    )
+    .unwrap();
+    let output = harness.run(&["install", "-vv"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("found manifest Cargo.toml"));
+    assert!(stderr(&output).contains("selected install backend cargo"));
 }
 
 #[test]
@@ -2653,11 +2893,10 @@ fn gitlab_clone_falls_back_to_git_when_glab_is_absent() {
 #[test]
 fn dash_leading_scp_remote_is_forced_after_option_terminator_for_git() {
     // Regression (F2): a dash-leading scp-like repospec must reach git after a
-    // `--` option terminator, never in git's option position. Two `--` are
-    // needed at the shell: clap (trailing_var_arg) consumes the first, and
-    // parse_clone_args consumes the second to mark `-x:y` as a positional.
+    // `--` option terminator, never in git's option position. The separator is
+    // preserved through clap and the Git-aware clone parser.
     let harness = Harness::new(&["git"]);
-    let output = harness.run(&["clone", "--", "--", "-x:y"]);
+    let output = harness.run(&["clone", "--", "-x:y"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let clone = harness.invocation("git");
     assert_eq!(&clone.args[..3], ["clone", "--", "-x:y"]);
@@ -4189,36 +4428,36 @@ fn local_go_install_reports_all_binaries_and_path_shadowing() {
     let targets = format!("{}\n{}", gh.display(), gen_docs.display());
 
     let output = harness
-        .command(&["install", "--tool", "go", "./local repo"])
+        .command(&["install", "--tool", "go", "./local repo", "-v"])
         .env("PATH", path)
         .env("DTR_TEST_GO_LIST_OUTPUT", targets)
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "");
-    let narration = stderr(&output);
+    let verbosity = stderr(&output);
     assert!(
-        narration.contains(&format!(
+        verbosity.contains(&format!(
             "→ go install ./... (in '{}')",
             repo.canonicalize().unwrap().display()
         )),
-        "{narration}"
+        "{verbosity}"
     );
     assert!(
-        narration.contains(&format!(
+        verbosity.contains(&format!(
             "installed: gh, gen-docs → {}",
             install_directory.display()
         )),
-        "{narration}"
+        "{verbosity}"
     );
     assert!(
-        narration.contains(&format!(
+        verbosity.contains(&format!(
             "warning: 'gh' is shadowed by {} (earlier on PATH)",
             harness.bin.join("gh").display()
         )),
-        "{narration}"
+        "{verbosity}"
     );
-    assert!(!narration.contains("'gen-docs' is shadowed"), "{narration}");
+    assert!(!verbosity.contains("'gen-docs' is shadowed"), "{verbosity}");
     assert_eq!(
         harness.invocation("go-list").args,
         [
@@ -4231,14 +4470,14 @@ fn local_go_install_reports_all_binaries_and_path_shadowing() {
 }
 
 #[test]
-fn go_path_warning_survives_no_narration() {
+fn go_path_warning_survives_no_verbosity() {
     let harness = Harness::new(&["go"]);
     let install_directory = harness.work.join("go-bin");
     fs::create_dir(&install_directory).unwrap();
     write_executable(&install_directory.join("tool"));
 
     let output = harness
-        .command(&["--no-narration", "install", "--tool", "go", "owner/tool"])
+        .command(&["-qq", "install", "--tool", "go", "owner/tool"])
         .env("DTR_TEST_GO_GOBIN", &install_directory)
         .output()
         .unwrap();

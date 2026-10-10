@@ -231,6 +231,32 @@ fn example_reexec_preserves_arguments_directory_environment_and_tracking() {
 }
 
 #[test]
+fn quiet_self_install_hides_build_output_but_reveals_build_failures() {
+    for fail in [false, true] {
+        let harness = Harness::new();
+        let output = harness
+            .command(&["install", "-qq", "--tool", "cargo", "."])
+            .env("DTR_FIXTURE_BUILD_EXIT", if fail { "7" } else { "0" })
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.contains("fixture build diagnostic"),
+            fail,
+            "{stderr}"
+        );
+        if fail {
+            assert_eq!(output.status.code(), Some(2), "{stderr}");
+            assert!(stderr.contains("exited with status 7"));
+        } else {
+            assert!(output.status.success(), "{stderr}");
+            assert_eq!(stderr, "");
+            assert_eq!(harness.log("install.reexec"), "1");
+        }
+    }
+}
+
+#[test]
 fn kit_self_install_hands_off_once_and_returns_job_failures() {
     let harness = Harness::new();
     let config = harness.directory.path().join("config");

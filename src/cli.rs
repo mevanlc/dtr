@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use serde::{Deserialize, Serialize};
 
@@ -19,16 +19,66 @@ pub(crate) struct Cli {
     #[arg(short = 'n', long, global = true)]
     pub(crate) dry_run: bool,
 
-    /// Print dtr's execution narration
-    #[arg(long, global = true, conflicts_with = "no_narration")]
-    pub(crate) narration: bool,
-
-    /// Suppress dtr's execution narration (warnings remain enabled)
-    #[arg(long, global = true, conflicts_with = "narration")]
-    pub(crate) no_narration: bool,
+    #[arg(skip)]
+    pub(crate) verbosity_adjustment: i32,
 
     #[command(subcommand)]
     pub(crate) command: DtrCommand,
+}
+
+impl Cli {
+    pub(crate) fn command() -> clap::Command {
+        fn with_verbosity(command: clap::Command) -> clap::Command {
+            // Keep counts local to each scope: clap propagates global values,
+            // which would replace counts supplied before a subcommand.
+            command
+                .arg(clap::Arg::new("quiet").short('q').long("quiet")
+                    .action(ArgAction::Count)
+                    .help("Less output; -q shows compact results, -qq only warnings and failures"))
+                .arg(clap::Arg::new("verbose").short('v').long("verbose")
+                    .action(ArgAction::Count)
+                    .help("More output; -v shows commands and skips, -vv explains decisions; cancels -q"))
+                .mut_subcommands(with_verbosity)
+        }
+        with_verbosity(<Self as CommandFactory>::command())
+    }
+
+    pub(crate) fn parse() -> Self {
+        Self::try_parse_from(std::env::args_os()).unwrap_or_else(|error| error.exit())
+    }
+
+    pub(crate) fn try_parse_from<I, T>(arguments: I) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        let arguments = arguments
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<OsString>>();
+        let matches = Self::command().try_get_matches_from(&arguments)?;
+        let mut adjustment = 0;
+        let mut scope = &matches;
+        loop {
+            adjustment +=
+                i32::from(scope.get_count("verbose")) - i32::from(scope.get_count("quiet"));
+            match scope.subcommand() {
+                Some((_, child)) => scope = child,
+                None => break,
+            }
+        }
+        let mut cli = Self::from_arg_matches(&matches)?;
+        // Clap consumes a separator before clone's first positional. Restore
+        // that boundary for the Git-aware parser, which owns the trailing argv.
+        if let DtrCommand::Clone(args) = &mut cli.command
+            && let Some(separator) = arguments.iter().position(|argument| argument == "--")
+            && args.argv == arguments[separator + 1..]
+        {
+            args.argv.insert(0, OsString::from("--"));
+        }
+        cli.verbosity_adjustment = adjustment;
+        Ok(cli)
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -47,7 +97,7 @@ pub(crate) enum DtrCommand {
 
     /// Read or change dtr configuration
     #[command(
-        long_about = "Read or change dtr configuration.\n\nAvailable configuration keys:\n  github.auth.auto_switch\n      Comma-separated GitHub CLI account names eligible for process-scoped\n      authentication when an explicit repository owner matches.\n  narration\n      Whether dtr prints command, clone-path, and install-success narration.\n  uv.install.force\n      Whether uv installs receive --force.\n  uv.install.editable\n      Whether uv installs receive --editable.\n  uv.install.reinstall\n      Whether uv installs receive --reinstall."
+        long_about = "Read or change dtr configuration.\n\nAvailable configuration keys:\n  github.auth.auto_switch\n      Comma-separated GitHub CLI account names eligible for process-scoped\n      authentication when an explicit repository owner matches.\n  verbosity\n      Default output level (-2 through 2); -q and -v adjust this level.\n  uv.install.force\n      Whether uv installs receive --force.\n  uv.install.editable\n      Whether uv installs receive --editable.\n  uv.install.reinstall\n      Whether uv installs receive --reinstall."
     )]
     Config(ConfigArgs),
 
@@ -113,7 +163,10 @@ pub(crate) enum KitCommand {
     Add(KitAddArgs),
 
     /// Install every repository in the kit
-    #[command(visible_alias = "i")]
+    #[command(
+        visible_alias = "i",
+        long_about = "Install every repository in the kit.\n\nWith -n/--dry-run, list entries that would be installed, one per line. Add -v to show skipped entries and commands."
+    )]
     Install(KitInstallArgs),
 
     /// List kit entries as reusable dtr install commands
@@ -182,14 +235,6 @@ pub(crate) struct KitInstallArgs {
     /// Maximum concurrent installs; auto uses ceil(available CPU cores / 2)
     #[arg(short = 'j', long, value_name = "n|auto", default_value_t = Jobs::Auto)]
     pub(crate) jobs: Jobs,
-
-    /// Suppress installer stdout; repeat for stderr, then dtr narration
-    #[arg(short = 'q', long, action = ArgAction::Count, conflicts_with = "verbose")]
-    pub(crate) quiet: u8,
-
-    /// Print details about skipped, up-to-date repositories
-    #[arg(short = 'v', long, conflicts_with = "quiet")]
-    pub(crate) verbose: bool,
 
     /// Install even when the recorded Git revision is still current
     #[arg(long)]
@@ -312,7 +357,7 @@ pub(crate) struct ConfigSetArgs {
     pub(crate) key: String,
 
     /// Configuration value
-    #[arg(value_name = "VALUE")]
+    #[arg(value_name = "VALUE", allow_negative_numbers = true)]
     pub(crate) value: String,
 }
 
@@ -326,7 +371,6 @@ pub(crate) struct ConfigKeyArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
 
     #[test]
     fn dry_run_is_inherited_at_every_subcommand_level() {
@@ -431,7 +475,6 @@ mod tests {
         };
         assert_eq!(args.jobs, Jobs::Auto);
         assert_eq!(args.file, None);
-        assert_eq!(args.quiet, 0);
         assert!(!args.force);
 
         let cli = Cli::try_parse_from(["dtr", "kit", "install", "--force"])
@@ -557,13 +600,7 @@ mod tests {
             (vec!["dtr", "kit", "install", "--quiet", "--quiet"], 2),
         ] {
             let cli = Cli::try_parse_from(arguments).expect("valid quiet level");
-            let DtrCommand::Kit(args) = cli.command else {
-                panic!("expected kit command");
-            };
-            let KitCommand::Install(args) = args.command else {
-                panic!("expected kit install command");
-            };
-            assert_eq!(args.quiet, expected);
+            assert_eq!(cli.verbosity_adjustment, -expected);
         }
     }
 
@@ -575,32 +612,17 @@ mod tests {
     }
 
     #[test]
-    fn narration_overrides_are_global_and_mutually_exclusive() {
-        let before = Cli::try_parse_from(["dtr", "--no-narration", "clone", "owner/repo"])
-            .expect("valid narration opt-out");
-        assert!(before.no_narration);
-
-        let after = Cli::try_parse_from([
-            "dtr",
-            "install",
-            "--narration",
-            "--tool",
-            "go",
-            "owner/repo",
-        ])
-        .expect("valid narration opt-in");
-        assert!(after.narration);
-
-        assert!(
-            Cli::try_parse_from([
-                "dtr",
-                "--narration",
-                "--no-narration",
-                "install",
-                "owner/repo",
-            ])
-            .is_err()
-        );
+    fn verbosity_counts_across_subcommand_scopes_and_cancels() {
+        for (arguments, expected) in [
+            (vec!["dtr", "-q", "kit", "-q", "install", "-vvv"], 1),
+            (vec!["dtr", "-vv", "install", "owner/repo", "-q"], 1),
+            (vec!["dtr", "config", "-q", "edit", "-v"], 0),
+            (vec!["dtr", "-qqqq", "kit", "-v", "install", "-vv"], -1),
+            (vec!["dtr", "--verbose", "kit", "install", "--quiet"], 0),
+        ] {
+            let cli = Cli::try_parse_from(arguments).expect("valid verbosity flags");
+            assert_eq!(cli.verbosity_adjustment, expected);
+        }
     }
 
     #[test]

@@ -70,16 +70,26 @@ Probe failures warn and install, while successful batches atomically merge state
 back into the selected default or alternate kit without overwriting entries
 edited during execution.
 
-※ `dtr kit install` originally always retained native child output. It now
-accepts a counted `-q`/`--quiet`: one occurrence suppresses installer stdout and
-two suppress installer stderr as well; a third also disables dtr narration.
-Warnings and errors remain visible at every level. With no quiet option, native
-child output and immediate narration remain visible while jobs run. Dtr command,
-install-success, and warning messages are replayed in configuration order after
-all jobs complete. PATH warnings are replayed even when narration is disabled.
-Windows narration normalizes displayed local paths to native backslash-separated
+※ The earlier narration switches and kit-only stdout/stderr quiet levels are
+superseded by a shared verbosity scale. Repeated `-q` and `-v` cancel across
+command positions, adjusting the `verbosity` configuration baseline (default 0).
+The final sum is capped to -2 through 2: `-qq` shows dtr warnings and failures;
+`-q` shows compact results; the default shows progress and native output;
+`-v` adds commands and skipped entries; `-vv` adds resolution and cache decisions.
+Quiet child output is retained and replayed to stderr on failure. Command-result
+stdout and dry-run plans remain available at every level. At normal verbosity
+and above, dtr messages remain visible while jobs run and are replayed in entry
+order afterward. At `-q`, compact results appear only in the final replay. PATH
+warnings remain visible and are replayed at every level.
+Windows messages normalize displayed local paths to native backslash-separated
 paths without the canonicalization-only `\\?\` prefix; execution argv retains
 the original resolved path.
+
+※ Kit install dry runs now list only entries that would be installed, one per
+line in kit order. Skipped entries require verbosity 1 or higher (`-v` with the
+default baseline); the job count and exact commands also appear at that level
+on stderr. `--force` lists every entry for installation. The earlier multi-line
+plan blocks and unconditional skip output are superseded.
 
 The first Ctrl-C stops new job dispatch while allowing active child processes to
 finish normally. Dtr emits the accumulated replay only after they finish,

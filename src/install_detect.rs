@@ -11,6 +11,7 @@ use crate::cli::InstallTool;
 use crate::command::{apply_environment, command_exists};
 use crate::error::DtrError;
 use crate::github_auth::{self, GithubAuthSelection};
+use crate::output::Verbosity;
 use crate::repospec::{Forge, RepoSpec};
 
 const EXPLICIT_TOOL_SUGGESTION: &str = "use --tool <go|cargo|uv|pipx|npm> to select one explicitly";
@@ -57,22 +58,40 @@ pub(crate) fn detect_tool(
     spec: &RepoSpec,
     github_owner: Option<&str>,
     github_selection: Option<&GithubAuthSelection>,
+    verbosity: Verbosity,
 ) -> Result<InstallTool, DtrError> {
     if let Some(path) = spec.local_path() {
-        return detect_local_tool(path);
+        verbosity.debug(format_args!("inspecting local repository manifests"));
+        return detect_local_tool(path, verbosity);
     }
-    let entries = inspect_root(spec, github_owner, github_selection)?;
+    let entries = inspect_root(spec, github_owner, github_selection, verbosity)?;
+    report_markers(&entries, verbosity);
     infer_tool(&entries, command_exists)
 }
 
-fn detect_local_tool(path: &Path) -> Result<InstallTool, DtrError> {
+fn report_markers(entries: &[RootEntry], verbosity: Verbosity) {
+    for (_, marker) in MARKERS {
+        if entries
+            .iter()
+            .any(|entry| entry.file_like && entry.name == marker.as_bytes())
+        {
+            verbosity.debug(format_args!("found manifest {marker}"));
+        }
+    }
+}
+
+fn detect_local_tool(path: &Path, verbosity: Verbosity) -> Result<InstallTool, DtrError> {
     let entries = inspect_local_root(path)?;
+    report_markers(&entries, verbosity);
     if has_supported_manifest(&entries) {
         return infer_tool(&entries, command_exists);
     }
     if has_non_test_go_source(&entries)
         && git_worktree_root(path).is_some_and(|root| has_ancestor_go_module(path, &root))
     {
+        verbosity.debug(format_args!(
+            "selecting Go from source files and an ancestor go.mod inside the worktree"
+        ));
         return Ok(InstallTool::Go);
     }
     infer_tool(&entries, command_exists)
@@ -217,11 +236,15 @@ fn inspect_root(
     spec: &RepoSpec,
     github_owner: Option<&str>,
     github_selection: Option<&GithubAuthSelection>,
+    verbosity: Verbosity,
 ) -> Result<Vec<RootEntry>, DtrError> {
     let mut failed_attempts = Vec::new();
     if let Some((owner, repo)) = github_repository(spec, github_owner)
         && command_exists("gh")
     {
+        verbosity.debug(format_args!(
+            "inspecting repository root through the GitHub API"
+        ));
         match inspect_github_root(owner, repo, github_selection) {
             Ok(entries) => return Ok(entries),
             Err(error) => failed_attempts.push(error),
@@ -230,6 +253,9 @@ fn inspect_root(
     if let Some(project) = gitlab_project(spec)
         && command_exists("glab")
     {
+        verbosity.debug(format_args!(
+            "inspecting repository root through the GitLab API"
+        ));
         match inspect_gitlab_root(&project) {
             Ok(entries) => return Ok(entries),
             Err(error) => failed_attempts.push(error),
@@ -237,6 +263,7 @@ fn inspect_root(
     }
 
     if command_exists("git") {
+        verbosity.debug(format_args!("inspecting repository root through a temporary filtered Git clone ({} prior API failures)", failed_attempts.len()));
         match inspect_git_root(spec, github_owner, github_selection) {
             Ok(entries) => return Ok(entries),
             Err(error) => failed_attempts.push(error),

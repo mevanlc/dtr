@@ -13,6 +13,7 @@ use super::DTR_SELF_LOCKS;
 use super::DTR_SELF_REEXEC;
 use crate::command::InterruptState;
 use crate::error::DtrError;
+use crate::output::{CapturedOutput, Verbosity};
 
 const EXAMPLE: &str = "dtr-trampoline";
 
@@ -163,16 +164,23 @@ struct Package {
     manifest_path: PathBuf,
 }
 
-fn metadata(package_root: &Path) -> Result<Metadata, DtrError> {
+fn metadata(package_root: &Path, verbosity: Verbosity) -> Result<Metadata, DtrError> {
     let output = Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version=1"])
         .arg("--manifest-path")
         .arg(package_root.join("Cargo.toml"))
         .current_dir(package_root)
-        .stderr(Stdio::inherit())
+        .stderr(if verbosity.progress() {
+            Stdio::inherit()
+        } else {
+            Stdio::piped()
+        })
         .output()
         .map_err(|error| DtrError::new(format!("could not start cargo metadata: {error}")))?;
     if !output.status.success() {
+        if !verbosity.progress() {
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        }
         return Err(DtrError::new(format!(
             "cargo metadata for dtr exited with status {}",
             output.status.code().unwrap_or(1)
@@ -201,7 +209,19 @@ fn artifact_path(message: &serde_json::Value, package_id: &str) -> Option<PathBu
     message["executable"].as_str().map(PathBuf::from)
 }
 
-fn build_example(package_root: &Path, package_id: &str) -> Result<PathBuf, DtrError> {
+fn build_example(
+    package_root: &Path,
+    package_id: &str,
+    verbosity: Verbosity,
+) -> Result<PathBuf, DtrError> {
+    let mut captured = if verbosity.progress() {
+        None
+    } else {
+        Some(CapturedOutput::new()?)
+    };
+    verbosity.debug(format_args!(
+        "building the local dtr trampoline for self-install"
+    ));
     let mut child = Command::new("cargo")
         .args([
             "build",
@@ -218,6 +238,10 @@ fn build_example(package_root: &Path, package_id: &str) -> Result<PathBuf, DtrEr
         .arg(package_id)
         .current_dir(package_root)
         .stdout(Stdio::piped())
+        .stderr(match &captured {
+            Some(output) => output.stdio()?,
+            None => Stdio::inherit(),
+        })
         .spawn()
         .map_err(|error| DtrError::new(format!("could not start cargo build for dtr: {error}")))?;
     let mut executable = None;
@@ -237,13 +261,29 @@ fn build_example(package_root: &Path, package_id: &str) -> Result<PathBuf, DtrEr
                 }
             }
             // Cargo cannot control stdout from every compiler/build tool.
-            Err(_) => eprintln!("{line}"),
+            Err(_) => match &mut captured {
+                Some(output) => {
+                    if let Err(error) = output
+                        .append(line.as_bytes())
+                        .and_then(|()| output.append(b"\n"))
+                    {
+                        read_error = Some(error);
+                        break;
+                    }
+                }
+                None => eprintln!("{line}"),
+            },
         }
     }
     let status = child.wait()?;
+    if (!status.success() || read_error.is_some())
+        && let Some(output) = &mut captured
+    {
+        output.replay()?;
+    }
     if let Some(error) = read_error {
         return Err(DtrError::new(format!(
-            "could not read cargo build output: {error}"
+            "could not process cargo build output: {error}"
         )));
     }
     if !status.success() {
@@ -260,16 +300,21 @@ fn build_example(package_root: &Path, package_id: &str) -> Result<PathBuf, DtrEr
 pub(crate) fn execute(
     package_root: &Path,
     interrupted: Option<Arc<InterruptState>>,
+    verbosity: Verbosity,
 ) -> Result<i32, DtrError> {
     let interrupted = match interrupted {
         Some(state) => state,
         None => InterruptState::install_handler()?,
     };
     interrupted.supervise();
-    execute_inner(package_root, &interrupted)
+    execute_inner(package_root, &interrupted, verbosity)
 }
 
-fn execute_inner(package_root: &Path, interrupted: &InterruptState) -> Result<i32, DtrError> {
+fn execute_inner(
+    package_root: &Path,
+    interrupted: &InterruptState,
+    verbosity: Verbosity,
+) -> Result<i32, DtrError> {
     let current_exe = env::current_exe()?.canonicalize()?;
     let mut locks = Locks {
         files: vec![lock("executable", &current_exe)?],
@@ -279,7 +324,7 @@ fn execute_inner(package_root: &Path, interrupted: &InterruptState) -> Result<i3
     }
     let package_root = package_root.canonicalize()?;
     let manifest = package_root.join("Cargo.toml").canonicalize()?;
-    let metadata = metadata(&package_root);
+    let metadata = metadata(&package_root, verbosity);
     if interrupted.is_interrupted() {
         return Ok(130);
     }
@@ -296,7 +341,7 @@ fn execute_inner(package_root: &Path, interrupted: &InterruptState) -> Result<i3
     if interrupted.is_interrupted() {
         return Ok(130);
     }
-    let executable = build_example(&package_root, &package.id);
+    let executable = build_example(&package_root, &package.id, verbosity);
     if interrupted.is_interrupted() {
         return Ok(130);
     }

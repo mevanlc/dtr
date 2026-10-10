@@ -6,18 +6,19 @@ mod error;
 mod github_auth;
 mod install_detect;
 mod kit;
+mod output;
 mod repospec;
 mod resolve;
 mod self_rebuild;
 
 use std::io::{self, Write};
 
-use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 
 use crate::cli::{Cli, DtrCommand};
 use crate::clone_args::{ParsedClone, parse_clone_args};
 use crate::error::DtrError;
+use crate::output::Verbosity;
 use crate::resolve::{plan_clone, plan_install};
 
 pub fn main_entry() -> i32 {
@@ -35,8 +36,7 @@ pub fn main_entry() -> i32 {
 fn run() -> Result<i32, DtrError> {
     let Cli {
         dry_run,
-        narration,
-        no_narration,
+        mut verbosity_adjustment,
         command,
     } = Cli::parse();
 
@@ -44,15 +44,7 @@ fn run() -> Result<i32, DtrError> {
         self_rebuild::sweep_stale_old_binary();
     }
 
-    let narration_override = if narration {
-        Some(true)
-    } else if no_narration {
-        Some(false)
-    } else {
-        None
-    };
-
-    let plan = match command {
+    let (plan, verbosity) = match command {
         DtrCommand::Completion(args) => {
             if dry_run {
                 return Err(DtrError::new("--dry-run does not apply to dtr completion"));
@@ -70,17 +62,21 @@ fn run() -> Result<i32, DtrError> {
             }
             return Ok(0);
         }
-        DtrCommand::Clone(args) => match parse_clone_args(args.argv)? {
+        DtrCommand::Clone(args) => match parse_clone_args(args.argv, &mut verbosity_adjustment)? {
             ParsedClone::Help => {
                 print!("{}", clone_args::HELP);
                 return Ok(0);
             }
-            ParsedClone::Request(request) => plan_clone(*request)?,
+            ParsedClone::Request(request) => {
+                let verbosity = Verbosity::load(verbosity_adjustment)?;
+                (plan_clone(*request, verbosity)?, verbosity)
+            }
         },
         DtrCommand::Install(args) if args.add => {
-            return kit::run_install_and_add(args, dry_run, narration_override);
+            return kit::run_install_and_add(args, dry_run, verbosity_adjustment);
         }
         DtrCommand::Install(args) => {
+            let verbosity = Verbosity::load(verbosity_adjustment)?;
             if !dry_run
                 && let home = home::home_dir()
                 && let Ok((entry, _)) = kit::InstallEntry::from_install_args(&args, home.as_deref())
@@ -88,15 +84,15 @@ fn run() -> Result<i32, DtrError> {
                 && let Some(package_root) =
                     self_rebuild::resolve_local_package_root(&entry.repospec)
             {
-                return self_rebuild::execute(&package_root, None);
+                return self_rebuild::execute(&package_root, None, verbosity);
             }
-            plan_install(args)?
+            (plan_install(args, verbosity)?, verbosity)
         }
         DtrCommand::Kit(args) => {
-            return kit::run(args, dry_run, narration_override);
+            return kit::run(args, dry_run, verbosity_adjustment);
         }
         DtrCommand::Config(args) => {
-            return config::run(args, dry_run, narration_override);
+            return config::run(args, dry_run, verbosity_adjustment);
         }
     };
 
@@ -104,10 +100,6 @@ fn run() -> Result<i32, DtrError> {
         plan.explain();
         Ok(0)
     } else {
-        let narration = match narration_override {
-            Some(narration) => narration,
-            None => config::Config::load_for_runtime()?.narration(),
-        };
-        plan.execute(narration)
+        plan.execute(verbosity)
     }
 }

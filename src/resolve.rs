@@ -17,7 +17,10 @@ use crate::github_auth::GithubAuthSelection;
 use crate::install_detect;
 use crate::repospec::{Forge, InstallSource, RepoSpec};
 
-pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError> {
+pub(crate) fn plan_clone(
+    request: CloneRequest,
+    verbosity: crate::output::Verbosity,
+) -> Result<CommandPlan, DtrError> {
     if request.name_mode != NameMode::Default
         && request.spec.forge_parts().is_none()
         && !matches!(request.spec, RepoSpec::GithubMine { .. })
@@ -44,9 +47,16 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
 
     let (target_dir, pass_target, preparations) = clone_target(&request)?;
     let repospec = request.spec.description();
+    verbosity.debug(format_args!(
+        "resolved {repospec}; clone target {}",
+        crate::command::display_path(&target_dir)
+    ));
 
     match &request.spec {
         RepoSpec::GithubMine { repo } => {
+            verbosity.debug(format_args!(
+                "selecting gh for a bare GitHub repository name"
+            ));
             require_command("gh", "cloning a bare GitHub repository name")?;
             Ok(forge_clone_plan(
                 "gh",
@@ -74,6 +84,9 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
                 Forge::GitLab => "glab",
             };
             if command_exists(preferred) {
+                verbosity.debug(format_args!(
+                    "selecting {preferred}: recognized forge and CLI available"
+                ));
                 let mut repository = remote
                     .clone()
                     .unwrap_or_else(|| request.spec.forge_slug().expect("forge slug").into());
@@ -110,6 +123,7 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
                     removed_environment,
                 ))
             } else {
+                verbosity.debug(format_args!("selecting git: {preferred} is unavailable"));
                 if request.upstream_remote_name.is_some() {
                     require_command("gh", "using -U/--upstream-remote-name")?;
                 }
@@ -126,6 +140,9 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
             }
         }
         RepoSpec::Local { .. } | RepoSpec::GitUrl { .. } | RepoSpec::ScpLike { .. } => {
+            verbosity.debug(format_args!(
+                "selecting git for a local repository or generic remote"
+            ));
             require_command("git", "cloning a repository")?;
             let remote = request.spec.git_remote()?;
             Ok(git_clone_plan(
@@ -140,9 +157,16 @@ pub(crate) fn plan_clone(request: CloneRequest) -> Result<CommandPlan, DtrError>
     }
 }
 
-pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
+pub(crate) fn plan_install(
+    args: InstallArgs,
+    verbosity: crate::output::Verbosity,
+) -> Result<CommandPlan, DtrError> {
     let requested_tool = args.tool;
     let InstallSource { spec, go_query } = InstallSource::parse(&args.repospec)?;
+    verbosity.debug(format_args!(
+        "resolved {}; requested tool {requested_tool}",
+        spec.description()
+    ));
     if go_query.is_some() && args.no_latest {
         return Err(DtrError::new(
             "an explicit Go version query conflicts with --no-latest",
@@ -166,10 +190,16 @@ pub(crate) fn plan_install(args: InstallArgs) -> Result<CommandPlan, DtrError> {
         GithubSelection::Unresolved
     };
     let selected_tool = if requested_tool == InstallTool::Auto {
-        install_detect::detect_tool(&spec, github_owner.as_deref(), github_selection.selection())?
+        install_detect::detect_tool(
+            &spec,
+            github_owner.as_deref(),
+            github_selection.selection(),
+            verbosity,
+        )?
     } else {
         requested_tool
     };
+    verbosity.debug(format_args!("selected install backend {selected_tool}"));
     if args.main && selected_tool != InstallTool::Go {
         return Err(DtrError::new(format!(
             "--main is currently supported only by the Go installer, but {selected_tool} was selected"

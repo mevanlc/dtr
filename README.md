@@ -110,7 +110,7 @@ dtr completion fish > ~/.config/fish/completions/dtr.fish
 ## Clone
 
 ```text
-dtr [--dry-run|-n] [--narration|--no-narration] clone [options] <dtr-repospec> [dir]
+dtr [--dry-run|-n] [-q...] [-v...] clone [options] <dtr-repospec> [dir]
 ```
 
 Repository references are classified in a stable order:
@@ -167,12 +167,15 @@ Native `git clone` options can appear in normal Git-style positions:
 ```sh
 dtr clone --depth 1 owner/repo
 dtr clone owner/repo --branch main checkout-dir
-dtr clone -vq owner/repo
+dtr clone --recursive owner/repo
 ```
 
 `dtr` reads the installed `git clone -h` surface at runtime, including which
 options consume values. When `gh` or `glab` is selected, those options are
 placed after the forge CLI's `--` separator.
+
+`-q`/`--quiet` and `-v`/`--verbose` control [dtr's verbosity](#verbosity)
+in every position, including after the repository. They are consumed by dtr.
 
 For a recognized GitHub repository, `-U NAME` and
 `--upstream-remote-name NAME` set the upstream remote name when cloning a fork.
@@ -228,7 +231,7 @@ editor command without creating directories or starting it.
 
 Configuration is stored at `<user-home>/.config/dtr/config.toml`.
 `DTR_CONFIG_DIR` overrides the containing directory. The file may contain the
-account allowlist, the narration preference, and the [uv install
+account allowlist, the verbosity preference, and the [uv install
 options](#backend-mappings); dtr never writes GitHub tokens to it.
 
 Clone and install operations proceed without account auto-switching when no
@@ -243,7 +246,7 @@ checkout is not persistently bound to that identity for later `git fetch` or
 ## Install from a repository
 
 ```text
-dtr [--dry-run|-n] [--narration|--no-narration] install|i [-a|--add] [-t|--tool <tool>] [--no-latest] [--main] [<dtr-repospec>] [-- <install-arg>...]
+dtr [--dry-run|-n] [-q...] [-v...] install|i [-a|--add] [-t|--tool <tool>] [--no-latest] [--main] [<dtr-repospec>] [-- <install-arg>...]
 ```
 
 `install` is deliberately repo-oriented. Dtr does not wrap the package-registry
@@ -458,8 +461,8 @@ updated without installing or writing it.
 ## Manage an installation kit
 
 ```text
-dtr [--dry-run|-n] [--narration|--no-narration] kit|k add|a [--no-install] [-t|--tool <tool>] [--no-latest] [--main] [<dtr-repospec>] [-- <install-arg>...]
-dtr [--dry-run|-n] [--narration|--no-narration] kit|k install|i [-j|--jobs <n|auto>] [-q|--quiet] [--force] [--file <FILE>]
+dtr [--dry-run|-n] [-q...] [-v...] kit|k add|a [--no-install] [-t|--tool <tool>] [--no-latest] [--main] [<dtr-repospec>] [-- <install-arg>...]
+dtr [--dry-run|-n] [-q...] [-v...] kit|k install|i [-j|--jobs <n|auto>] [--force] [--file <FILE>]
 dtr kit|k list|ls [--file <FILE>]
 dtr [--dry-run|-n] kit|k edit|e [--file <FILE>]
 ```
@@ -482,12 +485,20 @@ directory just as it does for `config.toml`.
 
 Before installing, dtr checks any generated `installed` state. If both the
 request fingerprint and selected Git commit still match, the entry is reported
-as up to date and skipped. The skip message follows narration settings, so
-`--no-narration` and `-qqq` suppress it, and each skipped entry is reported only
-once in the final ordered replay. `--force` bypasses every cached skip,
-runs the installers, and refreshes the resulting state. Dry-run mode reports
-skip decisions without invoking an installer; with `--force`, it prints every
-normal install plan.
+as up to date and skipped. Use `-v` to report each skipped entry once in the
+final ordered replay, or `-vv` to also explain cache decisions.
+`--force` bypasses every cached skip, runs the installers, and refreshes the
+resulting state. `dtr kit install -n` lists only entries that would be installed,
+updated, or rebuilt, one per line in kit order:
+
+```text
+install: ~/p/my/dtr (cargo)
+install: owner/tool (go)
+```
+
+Add `-v` to include `skip: ...` lines for up-to-date entries and print the job
+count and exact commands to stderr. With `--force`, every entry is listed for
+installation. Dry runs never invoke installers or write install state.
 
 Local repositories are cacheable only when the whole worktree is clean before
 and after installation and remains at the same commit. Tracked changes,
@@ -526,10 +537,10 @@ queue in configuration order, while process starts, native installer output, and
 completion order can differ. Native output can therefore interleave when more
 than one job runs.
 
-`-q` or `--quiet` suppresses native installer stdout. Repeat the option as `-qq`
-or `--quiet --quiet` to suppress native installer stderr as well. A third
-occurrence (`-qqq`) also suppresses dtr's execution narration, like
-`--no-narration`. Dtr's warnings and errors remain visible at every level.
+`-q` or `--quiet` hides routine native installer output and prints compact
+results once in the final ordered replay. `-qq` also hides those results.
+Dtr's warnings and errors remain visible at every level. Hidden child stdout
+and stderr are retained and printed to stderr if that child fails.
 
 Each entry requires `repospec`. It accepts the same repository references as
 `dtr install`, plus a leading `~/` for a path below the user home directory.
@@ -573,23 +584,55 @@ Malformed or missing configuration is a fatal error. Once the file has been
 loaded, an entry that cannot be planned, started, or completed emits a warning;
 dtr continues with the remaining entries and exits with status 1 after any such
 failure. Successful entries still refresh their state when another entry fails.
-Native installer output is left visible unless `--quiet` is used. Use
-`dtr --dry-run kit install` to print the resolved job count and each install or
-skip decision without running an installer.
-Enabled kit-install narration remains visible while jobs run and is replayed in
-configuration order after every build and install has completed. PATH warnings
-are included in the final replay even when narration is disabled.
+Native installer output is visible at verbosity 0 and above.
+At normal verbosity and above, dtr progress and result messages remain visible
+while jobs run and are replayed in configuration order after all jobs complete.
+Command echoes join that replay at `-v`. PATH warnings are included at every level.
 On the first Ctrl-C, dtr stops dispatching queued entries while allowing active
 children to finish normally. Only after they finish does dtr replay the messages
 generated so far, immediately before exiting with status 130. A second Ctrl-C
 terminates the active child process groups, then still waits for worker cleanup
 and performs the final replay. A third Ctrl-C exits immediately without replay.
 
-## Execution narration
+## Verbosity
 
-Individual clone and install operations narrate the command dtr is about to run
-on stderr. `dtr kit install` leaves those command and success messages visible
-as jobs run, then replays them in configuration order after all jobs complete.
+Use repeatable `-q`/`--quiet` and `-v`/`--verbose` on any command:
+
+| Level | Flags | Output |
+|---|---|---|
+| -2 | `-qq` | Dtr warnings and failure diagnostics |
+| -1 | `-q` | Compact results; no progress or routine native tool output |
+| 0 | none | Progress, results, and normal native tool output |
+| 1 | `-v` | Also exact commands, working directories, and skipped kit entries |
+| 2 | `-vv` | Also repository resolution, backend selection, and kit cache decisions |
+
+Counts add across command positions and cancel: `-vvq` is level 1, and
+`dtr -q kit -v install` is level 0. Dtr adds all counts before capping the
+result to -2 through 2. This makes aliases adjustable:
+
+```sh
+alias dtrc='dtr clone -q'
+dtrc owner/repo       # level -1
+dtrc -v owner/repo    # level 0
+dtrc -vv owner/repo   # level 1
+```
+
+The default baseline is 0. For a persistent preference, set
+`dtr config set verbosity -1`; flags then adjust that baseline. For example,
+with that setting, `-v` returns to level 0 and `-vv` selects level 1.
+
+Dtr's diagnostic output goes to stderr. Command results remain available at
+every verbosity: clone paths, configuration values, kit listings, completion
+scripts, and requested dry-run plans. Installer arguments after `--` go to the
+installer unchanged; for example, `dtr install --tool cargo . -- -vv` makes
+Cargo verbose independently of dtr.
+
+Quiet modes retain child stdout and stderr in temporary files and reveal them
+on stderr if a child fails, preserving the exit status. Native warnings mixed
+into a successful child's output are hidden too; dtr's own warnings remain
+visible. Editor sessions keep their normal interactive input and output.
+
+At `-v`, individual clone and install operations print the command about to run.
 On Windows, displayed local paths use native backslash separators and omit the
 verbatim `\\?\` prefix that filesystem canonicalization may produce.
 For a command that runs in a repository directory, the command line includes
@@ -604,11 +647,11 @@ only stdout line. This keeps the path easy to copy and makes command substitutio
 useful:
 
 ```sh
-cd "$(dtr clone owner/repo)"
+cd "$(dtr clone -q owner/repo)"
 ```
 
-After a successful Go install, dtr asks Go for the installed command targets and
-reports every binary and its directory. Local installs use `go list`; remote
+After a successful Go install, dtr asks Go for the installed command targets and,
+at level -1 or above, reports every binary and its directory. Local installs use `go list`; remote
 installs use `go env GOBIN GOPATH` and the installed import path:
 
 ```console
@@ -620,12 +663,6 @@ Dtr warns when a reported Go binary directory is absent from `PATH`, or when an
 earlier executable shadows an installed binary. A PATH entry that is a symlink
 to the installed binary is not treated as a shadow. `dtr kit install` also repeats
 these warnings in its final replay so they remain visible after native output.
-
-Use `--no-narration` to suppress dtr's command, clone-path, and install-success
-lines for one operation. Run `dtr config set narration false` for a persistent
-opt-out, and use `--narration` to override that setting for one operation. PATH
-warnings remain enabled when narration is disabled. Native child output is never
-suppressed.
 
 ## Dry run before doing
 

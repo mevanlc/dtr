@@ -14,11 +14,12 @@ use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value, value};
 
 use crate::cli::{InstallArgs, InstallTool, Jobs, KitArgs, KitCommand};
 use crate::command::{
-    CommandPlan, DtrMessage, GitReference, InstallRevision, InterruptState, ToolOutput,
-    apply_environment, config_parent, display_path, edit_file, friendly_path, shell_quote_argument,
+    CommandPlan, DtrMessage, GitReference, InstallRevision, InterruptState, apply_environment,
+    config_parent, display_path, edit_file, friendly_path, shell_quote_argument,
 };
 use crate::config::{self, Config};
 use crate::error::DtrError;
+use crate::output::Verbosity;
 use crate::repospec::{InstallSource, RepositoryIdentity};
 use crate::resolve::plan_install;
 use crate::self_rebuild;
@@ -180,7 +181,7 @@ fn is_false(value: &bool) -> bool {
 pub(crate) fn run(
     args: KitArgs,
     dry_run: bool,
-    narration_override: Option<bool>,
+    verbosity_adjustment: i32,
 ) -> Result<i32, DtrError> {
     let args = match args.command {
         KitCommand::Add(args) => {
@@ -189,19 +190,17 @@ pub(crate) fn run(
                 args.into_install_args(),
                 install,
                 dry_run,
-                narration_override,
+                verbosity_adjustment,
             );
         }
         KitCommand::List(args) => return list(&selected_file_path(args.file, !dry_run)?),
         KitCommand::Edit(args) => {
             let path = selected_file_path(args.file, !dry_run)?;
-            let narration = match narration_override {
-                Some(narration) => narration,
-                None => Config::load_for_runtime()
-                    .map(|config| config.narration())
-                    .unwrap_or(true),
-            };
-            return edit_file(&path, dry_run, narration);
+            let base = Config::load_for_runtime()
+                .map(|config| config.verbosity())
+                .unwrap_or(0);
+            let verbosity = Verbosity::new(base, verbosity_adjustment);
+            return edit_file(&path, dry_run, verbosity);
         }
         KitCommand::Install(args) => args,
     };
@@ -211,28 +210,8 @@ pub(crate) fn run(
     let requested_jobs = args.jobs;
     let force = args.force;
     let job_count = requested_jobs.resolve();
-    let tool_output = match args.quiet {
-        0 => ToolOutput::Inherit,
-        1 => ToolOutput::SuppressStdout,
-        _ => ToolOutput::SuppressStdoutAndStderr,
-    };
-    let needs_install_config = config
-        .install
-        .iter()
-        .any(|entry| matches!(entry.tool, InstallTool::Auto | InstallTool::Uv));
-    let runtime_config = if narration_override.is_none() || needs_install_config {
-        Config::load_for_runtime()?
-    } else {
-        Config::default()
-    };
-    let narration = if dry_run || args.quiet >= 3 {
-        false
-    } else {
-        match narration_override {
-            Some(narration) => narration,
-            None => runtime_config.narration(),
-        }
-    };
+    let runtime_config = Config::load_for_runtime()?;
+    let verbosity = Verbosity::new(runtime_config.verbosity(), verbosity_adjustment);
     let interrupted = if dry_run {
         None
     } else {
@@ -243,10 +222,10 @@ pub(crate) fn run(
     let mut jobs = Vec::new();
     let mut preflight_results = Vec::new();
 
-    if dry_run {
+    if dry_run && verbosity.verbose() {
         match requested_jobs {
-            Jobs::Auto => println!("jobs: {job_count} (auto)"),
-            Jobs::Count(_) => println!("jobs: {job_count}"),
+            Jobs::Auto => eprintln!("jobs: {job_count} (auto)"),
+            Jobs::Count(_) => eprintln!("jobs: {job_count}"),
         }
     }
 
@@ -263,7 +242,7 @@ pub(crate) fn run(
         let plan = entry
             .clone()
             .into_args(home.as_deref())
-            .and_then(plan_install);
+            .and_then(|args| plan_install(args, verbosity));
         if interrupted
             .as_ref()
             .is_some_and(|interrupted| interrupted.is_interrupted())
@@ -317,17 +296,37 @@ pub(crate) fn run(
                             && installed.request == request
                     })
             });
+        let cache_reason = if force {
+            "forced installation"
+        } else if cached {
+            "revision and install request match; skipping"
+        } else if before_revision.is_none() {
+            "no cacheable revision; installing"
+        } else if before_revision
+            .as_ref()
+            .is_some_and(|revision| revision.dirty)
+        {
+            "worktree is dirty; installing"
+        } else if entry.installed.is_none() {
+            "no recorded install state; installing"
+        } else {
+            "revision or install request changed; installing"
+        };
+        verbosity.debug(format_args!("kit entry {number}: {cache_reason}"));
 
         if dry_run {
-            println!();
-            println!("kit entry {number}:");
             if cached {
-                println!(
-                    "skip:     {} is already installed",
-                    short_revision(&before_revision.as_ref().expect("cached revision").commit)
-                );
+                if verbosity.verbose() {
+                    println!(
+                        "skip: {repospec} @ {} (already installed)",
+                        short_revision(&before_revision.as_ref().expect("cached revision").commit)
+                    );
+                }
             } else {
-                plan.explain();
+                println!("install: {repospec} ({})", plan.backend);
+                if verbosity.verbose() {
+                    eprintln!("{}", plan.command_message());
+                }
             }
             continue;
         }
@@ -338,7 +337,7 @@ pub(crate) fn run(
                 repospec,
                 short_revision(&before_revision.as_ref().expect("cached revision").commit)
             );
-            let messages = if narration && args.verbose {
+            let messages = if verbosity.verbose() {
                 vec![DtrMessage::Stderr(message)]
             } else {
                 Vec::new()
@@ -368,14 +367,13 @@ pub(crate) fn run(
             .find(|job| self_rebuild::is_self_install_entry(&job.entry))
             && let Some(package_root) = self_rebuild::resolve_local_package_root(&self_job.repospec)
         {
-            return self_rebuild::execute(&package_root, interrupted.clone());
+            return self_rebuild::execute(&package_root, interrupted.clone(), verbosity);
         }
 
         let execution = execute_jobs(
             jobs,
             job_count,
-            narration,
-            tool_output,
+            verbosity,
             preflight_results,
             interrupted
                 .as_deref()
@@ -399,10 +397,10 @@ fn run_add(
     args: InstallArgs,
     install: bool,
     dry_run: bool,
-    narration_override: Option<bool>,
+    verbosity_adjustment: i32,
 ) -> Result<i32, DtrError> {
     if install {
-        return run_install_and_add(args, dry_run, narration_override);
+        return run_install_and_add(args, dry_run, verbosity_adjustment);
     }
 
     let path = if dry_run {
@@ -419,17 +417,14 @@ fn run_add(
         return Ok(0);
     }
 
-    let narration = match narration_override {
-        Some(narration) => narration,
-        None => Config::load_for_runtime()?.narration(),
-    };
+    let verbosity = Verbosity::load(verbosity_adjustment)?;
     track_entry(
         loaded,
         entry,
         local_path.as_deref(),
         &path,
         home.as_deref(),
-        narration,
+        verbosity,
         true,
     )?;
     Ok(0)
@@ -438,8 +433,10 @@ fn run_add(
 pub(crate) fn run_install_and_add(
     args: InstallArgs,
     dry_run: bool,
-    narration_override: Option<bool>,
+    verbosity_adjustment: i32,
 ) -> Result<i32, DtrError> {
+    let runtime_config = Config::load_for_runtime()?;
+    let verbosity = Verbosity::new(runtime_config.verbosity(), verbosity_adjustment);
     let path = if dry_run {
         config::kit_file_path()?
     } else {
@@ -448,7 +445,7 @@ pub(crate) fn run_install_and_add(
     let _ = load_optional(&path)?;
     let home = home::home_dir();
     let (mut entry, local_path) = InstallEntry::from_install_args(&args, home.as_deref())?;
-    let plan = plan_install(args)?;
+    let plan = plan_install(args, verbosity)?;
     if entry.tool == InstallTool::Auto {
         entry.tool = backend_tool(plan.backend)?;
     }
@@ -462,20 +459,9 @@ pub(crate) fn run_install_and_add(
     if self_rebuild::is_self_install_entry(&entry)
         && let Some(package_root) = self_rebuild::resolve_local_package_root(&entry.repospec)
     {
-        return self_rebuild::execute(&package_root, None);
+        return self_rebuild::execute(&package_root, None, verbosity);
     }
 
-    let runtime_config = if narration_override.is_none()
-        || matches!(entry.tool, InstallTool::Auto | InstallTool::Uv)
-    {
-        Config::load_for_runtime()?
-    } else {
-        Config::default()
-    };
-    let narration = match narration_override {
-        Some(narration) => narration,
-        None => runtime_config.narration(),
-    };
     let request = request_fingerprint(&entry, &runtime_config);
     let before_revision = match probe_install_revision(&plan) {
         Ok(revision) => revision,
@@ -484,7 +470,7 @@ pub(crate) fn run_install_and_add(
             None
         }
     };
-    let code = plan.execute(narration)?;
+    let code = plan.execute(verbosity)?;
     if code != 0 {
         return Ok(code);
     }
@@ -499,7 +485,7 @@ pub(crate) fn run_install_and_add(
         local_path.as_deref(),
         &path,
         home.as_deref(),
-        narration,
+        verbosity,
         false,
     )?;
     Ok(0)
@@ -511,7 +497,7 @@ fn track_entry(
     local_path: Option<&Path>,
     path: &Path,
     home: Option<&Path>,
-    narration: bool,
+    verbosity: Verbosity,
     preserve_matching_state: bool,
 ) -> Result<(), DtrError> {
     let identity = normalized_repository_identity(&entry, home)?;
@@ -532,7 +518,7 @@ fn track_entry(
         };
         write_atomic(path, &text)?;
     }
-    if narration && existing.is_none() {
+    if verbosity.results() && existing.is_none() {
         let repospec = local_path
             .map(display_path)
             .unwrap_or_else(|| entry.repospec.clone());
@@ -544,8 +530,7 @@ fn track_entry(
 fn execute_jobs(
     jobs: Vec<InstallJob>,
     job_count: usize,
-    narration: bool,
-    tool_output: ToolOutput,
+    verbosity: Verbosity,
     initial_results: Vec<InstallJobResult>,
     interrupted: &InterruptState,
 ) -> KitExecution {
@@ -570,7 +555,7 @@ fn execute_jobs(
                     if interrupted.is_interrupted() {
                         break;
                     }
-                    let result = execute_job(&job, narration, tool_output, interrupted);
+                    let result = execute_job(&job, verbosity, interrupted);
                     results
                         .lock()
                         .expect("kit results should not be poisoned")
@@ -603,14 +588,13 @@ fn execute_jobs(
 
 fn execute_job(
     job: &InstallJob,
-    narration: bool,
-    tool_output: ToolOutput,
+    verbosity: Verbosity,
     interrupted: &InterruptState,
 ) -> InstallJobResult {
     let mut messages = Vec::new();
-    let execution =
-        job.plan
-            .execute_with_replay(narration, &mut messages, interrupted, tool_output);
+    let execution = job
+        .plan
+        .execute_with_replay(verbosity, &mut messages, interrupted);
     let mut state_update = None;
     let succeeded = if interrupted.is_interrupted() {
         false

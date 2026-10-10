@@ -10,15 +10,16 @@ use serde::{Deserialize, Serialize};
 use crate::cli::{ConfigArgs, ConfigCommand};
 use crate::command::edit_file;
 use crate::error::DtrError;
+use crate::output::Verbosity;
 
 pub(crate) const GITHUB_AUTO_SWITCH_KEY: &str = "github.auth.auto_switch";
-pub(crate) const NARRATION_KEY: &str = "narration";
+pub(crate) const VERBOSITY_KEY: &str = "verbosity";
 pub(crate) const UV_INSTALL_FORCE_KEY: &str = "uv.install.force";
 pub(crate) const UV_INSTALL_EDITABLE_KEY: &str = "uv.install.editable";
 pub(crate) const UV_INSTALL_REINSTALL_KEY: &str = "uv.install.reinstall";
 pub(crate) const CONFIG_KEYS: &[&str] = &[
     GITHUB_AUTO_SWITCH_KEY,
-    NARRATION_KEY,
+    VERBOSITY_KEY,
     UV_INSTALL_FORCE_KEY,
     UV_INSTALL_EDITABLE_KEY,
     UV_INSTALL_REINSTALL_KEY,
@@ -28,7 +29,7 @@ pub(crate) const CONFIG_KEYS: &[&str] = &[
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
-    narration: Option<bool>,
+    verbosity: Option<i8>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     github: Option<GithubConfig>,
@@ -219,8 +220,8 @@ impl Config {
             .map(String::as_str)
     }
 
-    pub(crate) fn narration(&self) -> bool {
-        self.narration.unwrap_or(true)
+    pub(crate) fn verbosity(&self) -> i8 {
+        self.verbosity.unwrap_or(0)
     }
 
     /// The `uv tool install` options enabled by configuration, in key order.
@@ -235,7 +236,7 @@ impl Config {
     fn value(&self, key: &str) -> Option<String> {
         match key {
             GITHUB_AUTO_SWITCH_KEY => Some(self.auto_switch_accounts()?.join(",")),
-            NARRATION_KEY => Some(self.narration?.to_string()),
+            VERBOSITY_KEY => Some(self.verbosity?.to_string()),
             key => Some(
                 self.uv_install_flag(UvInstallFlag::from_key(key)?)?
                     .to_string(),
@@ -301,6 +302,9 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), DtrError> {
+        if !(-2..=2).contains(&self.verbosity()) {
+            return Err(DtrError::new("verbosity must be an integer from -2 to 2"));
+        }
         let Some(accounts) = self.auto_switch_accounts() else {
             return Ok(());
         };
@@ -330,18 +334,16 @@ impl Config {
 pub(crate) fn run(
     args: ConfigArgs,
     dry_run: bool,
-    narration_override: Option<bool>,
+    verbosity_adjustment: i32,
 ) -> Result<i32, DtrError> {
     match args.command {
         ConfigCommand::Edit => {
             let path = config_file_path()?;
-            let narration = match narration_override {
-                Some(narration) => narration,
-                None => Config::load_for_runtime()
-                    .map(|config| config.narration())
-                    .unwrap_or(true),
-            };
-            edit_file(&path, dry_run, narration)
+            let base = Config::load_for_runtime()
+                .map(|config| config.verbosity())
+                .unwrap_or(0);
+            let verbosity = Verbosity::new(base, verbosity_adjustment);
+            edit_file(&path, dry_run, verbosity)
         }
         ConfigCommand::List(args) => {
             if dry_run {
@@ -371,7 +373,7 @@ pub(crate) fn run(
                 GITHUB_AUTO_SWITCH_KEY => {
                     config.set_auto_switch_accounts(parse_auto_switch_accounts(&args.value)?);
                 }
-                NARRATION_KEY => config.narration = Some(parse_bool(NARRATION_KEY, &args.value)?),
+                VERBOSITY_KEY => config.verbosity = Some(parse_verbosity(&args.value)?),
                 key => {
                     config.set_uv_install_flag(uv_install_flag(key), parse_bool(key, &args.value)?)
                 }
@@ -400,7 +402,7 @@ pub(crate) fn run(
                 let mut config = Config::load_at(&path)?;
                 match args.key.as_str() {
                     GITHUB_AUTO_SWITCH_KEY => config.unset_auto_switch_accounts(),
-                    NARRATION_KEY => config.narration = None,
+                    VERBOSITY_KEY => config.verbosity = None,
                     key => config.unset_uv_install_flag(uv_install_flag(key)),
                 }
                 config.save_at(&path)?;
@@ -416,6 +418,14 @@ fn parse_bool(key: &str, value: &str) -> Result<bool, DtrError> {
         "false" => Ok(false),
         _ => Err(DtrError::new(format!("{key} must be true or false"))),
     }
+}
+
+fn parse_verbosity(value: &str) -> Result<i8, DtrError> {
+    value
+        .parse::<i8>()
+        .ok()
+        .filter(|value| (-2..=2).contains(value))
+        .ok_or_else(|| DtrError::new("verbosity must be an integer from -2 to 2"))
 }
 
 fn uv_install_flag(key: &str) -> UvInstallFlag {
@@ -547,14 +557,16 @@ mod tests {
     }
 
     #[test]
-    fn narration_defaults_on_and_accepts_only_boolean_values() {
-        assert!(Config::default().narration());
-        assert!(parse_bool(NARRATION_KEY, "true").unwrap());
-        assert!(!parse_bool(NARRATION_KEY, "false").unwrap());
-        for value in ["", "yes", "False", "0"] {
-            let error = parse_bool(NARRATION_KEY, value).expect_err(value);
-            assert_eq!(error.to_string(), "narration must be true or false");
+    fn verbosity_defaults_to_zero_and_validates_the_supported_range() {
+        assert_eq!(Config::default().verbosity(), 0);
+        for value in -2..=2 {
+            assert_eq!(parse_verbosity(&value.to_string()).unwrap(), value);
         }
+        for value in ["", "yes", "false", "3", "-3"] {
+            assert!(parse_verbosity(value).is_err());
+        }
+        let config: Config = toml::from_str("verbosity = 3").unwrap();
+        assert!(config.validate().is_err());
     }
 
     #[test]

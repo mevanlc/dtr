@@ -6,13 +6,14 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, Output};
 use std::sync::Arc;
 #[cfg(unix)]
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::error::DtrError;
+use crate::output::{CapturedOutput, Verbosity};
 
 pub(crate) struct CommandPlan {
     pub(crate) kind: PlanKind,
@@ -74,13 +75,6 @@ pub(crate) struct InterruptState {
     supervising: AtomicBool,
     #[cfg(unix)]
     active_process_groups: Mutex<HashSet<u32>>,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum ToolOutput {
-    Inherit,
-    SuppressStdout,
-    SuppressStdoutAndStderr,
 }
 
 impl InterruptState {
@@ -191,13 +185,13 @@ impl DtrMessage {
 }
 
 struct MessageSink<'a> {
-    narration: bool,
+    verbosity: Verbosity,
     replay: Option<&'a mut Vec<DtrMessage>>,
 }
 
 impl MessageSink<'_> {
-    fn narration_enabled(&self) -> bool {
-        self.narration
+    fn results_enabled(&self) -> bool {
+        self.verbosity.results()
     }
 
     fn emit_and_replay(&mut self, message: DtrMessage) {
@@ -207,14 +201,18 @@ impl MessageSink<'_> {
         }
     }
 
-    fn narrate_stdout(&mut self, message: String) {
-        if self.narration {
-            self.emit_and_replay(DtrMessage::Stdout(message));
-        }
+    fn result_stdout(&mut self, message: String) {
+        self.emit_and_replay(DtrMessage::Stdout(message));
     }
 
-    fn narrate_stderr(&mut self, message: String) {
-        if self.narration {
+    fn result_stderr(&mut self, message: String) {
+        if self.verbosity.results() {
+            if !self.verbosity.progress()
+                && let Some(replay) = &mut self.replay
+            {
+                replay.push(DtrMessage::Stderr(message));
+                return;
+            }
             self.emit_and_replay(DtrMessage::Stderr(message));
         }
     }
@@ -252,33 +250,31 @@ impl CommandPlan {
         println!("command:  {}", self.render_command());
     }
 
-    pub(crate) fn execute(&self, narration: bool) -> Result<i32, DtrError> {
+    pub(crate) fn execute(&self, verbosity: Verbosity) -> Result<i32, DtrError> {
         let mut messages = MessageSink {
-            narration,
+            verbosity,
             replay: None,
         };
-        self.execute_with_messages(&mut messages, None, ToolOutput::Inherit)
+        self.execute_with_messages(&mut messages, None)
     }
 
     pub(crate) fn execute_with_replay(
         &self,
-        narration: bool,
+        verbosity: Verbosity,
         replay: &mut Vec<DtrMessage>,
         interrupted: &InterruptState,
-        tool_output: ToolOutput,
     ) -> Result<i32, DtrError> {
         let mut messages = MessageSink {
-            narration,
+            verbosity,
             replay: Some(replay),
         };
-        self.execute_with_messages(&mut messages, Some(interrupted), tool_output)
+        self.execute_with_messages(&mut messages, Some(interrupted))
     }
 
     fn execute_with_messages(
         &self,
         messages: &mut MessageSink<'_>,
         interrupted: Option<&InterruptState>,
-        tool_output: ToolOutput,
     ) -> Result<i32, DtrError> {
         for directory in &self.preparations {
             fs::create_dir_all(directory).map_err(|error| {
@@ -293,15 +289,13 @@ impl CommandPlan {
         command.args(&self.args);
         // The Unix exec handoff belongs only to dtr, never its installer.
         command.env_remove(crate::self_rebuild::DTR_SELF_LOCKS);
-        match tool_output {
-            ToolOutput::Inherit => {}
-            ToolOutput::SuppressStdout => {
-                command.stdout(Stdio::null());
-            }
-            ToolOutput::SuppressStdoutAndStderr => {
-                command.stdout(Stdio::null()).stderr(Stdio::null());
-            }
-        }
+        let mut captured = if messages.verbosity.progress() {
+            None
+        } else {
+            let output = CapturedOutput::new()?;
+            output.redirect(&mut command)?;
+            Some(output)
+        };
         apply_environment(&mut command, &self.environment, &self.removed_environment);
         if let Some(directory) = &self.current_dir {
             command.current_dir(directory);
@@ -309,16 +303,16 @@ impl CommandPlan {
         if let Some(interrupted) = interrupted {
             interrupted.configure_command(&mut command);
         }
-        if messages.narration_enabled() {
-            if let Some(directory) = &self.current_dir {
-                messages.narrate_stderr(format!(
-                    "→ {} (in {})",
-                    self.render_command(),
-                    shell_quote_path(&absolute_path(directory))
-                ));
+        if messages.verbosity.progress() {
+            let action = if matches!(self.kind, PlanKind::Clone) {
+                "cloning"
             } else {
-                messages.narrate_stderr(format!("→ {}", self.render_command()));
-            }
+                "installing"
+            };
+            messages.result_stderr(format!("{action}: {} ({})", self.repospec, self.backend));
+        }
+        if messages.verbosity.verbose() {
+            messages.result_stderr(self.command_message());
         }
         let mut child = command.spawn().map_err(|error| {
             DtrError::new(format!(
@@ -345,6 +339,16 @@ impl CommandPlan {
         let code = status.code().unwrap_or(1);
         if code == 0 {
             self.report_success(messages);
+        } else {
+            if let Some(output) = &mut captured {
+                output.replay()?;
+            }
+            if !interrupted.is_some_and(InterruptState::is_interrupted) {
+                messages.warn_stderr(format!(
+                    "dtr: error: {} exited with status {code}",
+                    self.program.to_string_lossy()
+                ));
+            }
         }
         Ok(code)
     }
@@ -359,26 +363,40 @@ impl CommandPlan {
         rendered.join(" ")
     }
 
+    pub(crate) fn command_message(&self) -> String {
+        if let Some(directory) = &self.current_dir {
+            format!(
+                "→ {} (in {})",
+                self.render_command(),
+                shell_quote_path(&absolute_path(directory))
+            )
+        } else {
+            format!("→ {}", self.render_command())
+        }
+    }
+
     fn report_success(&self, messages: &mut MessageSink<'_>) {
         match &self.kind {
             PlanKind::Clone => {
                 if let Some(target) = &self.target_dir {
-                    messages.narrate_stdout(display_path(&absolute_path(target)));
+                    messages.result_stdout(display_path(&absolute_path(target)));
                 }
             }
             PlanKind::GoInstall(source) => match self.go_installed_binaries(source) {
                 Ok(binaries) => {
-                    if messages.narration_enabled() {
-                        narrate_installed_binaries(&binaries, messages);
+                    if messages.results_enabled() {
+                        report_installed_binaries(&binaries, messages);
                     }
                     warn_about_path(&binaries, messages);
                 }
-                Err(error) if messages.narration_enabled() => {
-                    messages.narrate_stderr(format!("go install succeeded; {error}"));
+                Err(error) if messages.results_enabled() => {
+                    messages.result_stderr(format!("go install succeeded; {error}"));
                 }
                 Err(_) => {}
             },
-            PlanKind::OtherInstall => {}
+            PlanKind::OtherInstall => {
+                messages.result_stderr(format!("installed: {} ({})", self.repospec, self.backend));
+            }
         }
     }
 
@@ -460,9 +478,9 @@ fn remote_go_binary_name(import_path: &OsStr) -> Option<&str> {
     }
 }
 
-fn narrate_installed_binaries(binaries: &[PathBuf], messages: &mut MessageSink<'_>) {
+fn report_installed_binaries(binaries: &[PathBuf], messages: &mut MessageSink<'_>) {
     if binaries.is_empty() {
-        messages.narrate_stderr("go install succeeded; no binaries were reported".to_owned());
+        messages.result_stderr("go install succeeded; no binaries were reported".to_owned());
         return;
     }
 
@@ -477,10 +495,10 @@ fn narrate_installed_binaries(binaries: &[PathBuf], messages: &mut MessageSink<'
             .map(|name| name.to_string_lossy())
             .collect::<Vec<_>>()
             .join(", ");
-        messages.narrate_stderr(format!("installed: {names} → {}", display_path(directory)));
+        messages.result_stderr(format!("installed: {names} → {}", display_path(directory)));
     } else {
         for binary in binaries {
-            messages.narrate_stderr(format!("installed: {}", display_path(binary)));
+            messages.result_stderr(format!("installed: {}", display_path(binary)));
         }
     }
 }
@@ -744,7 +762,7 @@ fn quote_bytes(bytes: &[u8]) -> String {
     quoted
 }
 
-pub(crate) fn edit_file(path: &Path, dry_run: bool, narration: bool) -> Result<i32, DtrError> {
+pub(crate) fn edit_file(path: &Path, dry_run: bool, verbosity: Verbosity) -> Result<i32, DtrError> {
     let (program, mut arguments) = editor_command()?;
     arguments.push(path.as_os_str().to_os_string());
     let rendered = std::iter::once(program.as_os_str())
@@ -764,7 +782,7 @@ pub(crate) fn edit_file(path: &Path, dry_run: bool, narration: bool) -> Result<i
             parent.display()
         ))
     })?;
-    if narration {
+    if verbosity.verbose() {
         eprintln!("→ {rendered}");
     }
     let status = Command::new(&program)
