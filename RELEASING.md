@@ -85,6 +85,16 @@ ELF architecture, interpreter, and system-library dependencies. Android executio
 is not covered by hosted CI. macOS uses deployment target 11.0. FreeBSD builds
 are deferred while the shared infrastructure is developed.
 
+The manual `FreeBSD connectivity` workflow probes the CFARM build host from a
+GitHub-hosted Ubuntu runner using the repository secrets `CFARM_FBSD15_KEY`
+(an unencrypted SSH private key) and `CFARM_FBSD15_HOST` (hostname or
+`user@hostname`). Dispatch inputs select the SSH login and port, defaulting to
+`mevanlc` and `22`. It reports the OS, architecture, and available build tools,
+then verifies an rsync upload/download in a temporary directory and removes it.
+No Actions runner or toolchain is installed on the remote machine. The probe
+uses first-use host-key trust in a temporary known-hosts file; pin the host key
+before using this connection for release builds.
+
 Crate verification compiles the packaged source and installs from its unpacked
 contents. Before publishing, the upload job recreates the crate and checks its
 SHA-256 against the verified CI artifact. Its `cargo publish --no-verify` skips
