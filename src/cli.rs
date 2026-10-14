@@ -162,6 +162,10 @@ pub(crate) enum KitCommand {
     #[command(visible_alias = "a")]
     Add(KitAddArgs),
 
+    /// Remove a repository from the kit without uninstalling it
+    #[command(visible_alias = "rm")]
+    Remove(KitRemoveArgs),
+
     /// Install every repository in the kit
     #[command(
         visible_alias = "i",
@@ -224,6 +228,17 @@ impl KitAddArgs {
             install_args: self.install_args,
         }
     }
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct KitRemoveArgs {
+    /// Use an alternate kit TOML file
+    #[arg(long, value_name = "FILE")]
+    pub(crate) file: Option<PathBuf>,
+
+    /// Repository name, path, or remote to stop tracking (default: current directory)
+    #[arg(value_name = "DTR_REPOSPEC", default_value = ".")]
+    pub(crate) repospec: OsString,
 }
 
 #[derive(Debug, Args)]
@@ -461,6 +476,15 @@ mod tests {
             panic!("expected kit command");
         };
         assert!(matches!(args.command, KitCommand::List(_)));
+
+        let remove = Cli::try_parse_from(["dtr", "k", "rm"]).expect("valid kit remove alias");
+        let DtrCommand::Kit(args) = remove.command else {
+            panic!("expected kit command");
+        };
+        let KitCommand::Remove(args) = args.command else {
+            panic!("expected kit remove command");
+        };
+        assert_eq!(args.repospec, ".");
     }
 
     #[test]
@@ -507,7 +531,7 @@ mod tests {
         let args = parse_kit_add(&["dtr", "kit", "add", "--main"]);
         assert!(args.main);
 
-        for subcommand in ["list", "edit"] {
+        for subcommand in ["list", "edit", "remove"] {
             let cli = Cli::try_parse_from(["dtr", "kit", subcommand, "--file", "other.toml"])
                 .expect("valid kit management command");
             let DtrCommand::Kit(args) = cli.command else {
@@ -515,6 +539,7 @@ mod tests {
             };
             let file = match args.command {
                 KitCommand::List(args) | KitCommand::Edit(args) => args.file,
+                KitCommand::Remove(args) => args.file,
                 KitCommand::Add(_) | KitCommand::Install(_) => {
                     panic!("expected kit management command")
                 }

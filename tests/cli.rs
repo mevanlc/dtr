@@ -914,6 +914,7 @@ fn kit_aliases_are_visible_and_execute() {
     assert!(kit_help.status.success(), "{}", stderr(&kit_help));
     let help_text = stdout(&kit_help);
     assert!(help_text.contains("[alias: a]"), "{help_text}");
+    assert!(help_text.contains("[alias: rm]"), "{help_text}");
     assert!(help_text.contains("[alias: i]"), "{help_text}");
     assert!(help_text.contains("[alias: ls]"), "{help_text}");
     assert!(help_text.contains("[alias: e]"), "{help_text}");
@@ -2037,6 +2038,158 @@ fn kit_list_uses_the_alternate_config_and_prints_reusable_commands() {
             home.display()
         )
     );
+}
+
+#[test]
+fn kit_remove_matches_remote_identity_and_preserves_other_entries() {
+    let harness = Harness::new(&["cargo", "git", "gh"]);
+    let keep = r#"# keep this entry
+[[install]]
+repospec = "owner/keep" # keep the inline comment
+tool = "cargo"
+args = [ "--locked" ]
+installed = { commit = "keep-commit", request = "keep-request" }
+
+# keep the footer
+"#;
+    harness.write_kit(&format!(
+        "# my kit\n[[install]]\nrepospec = \"Owner/Tool\"\n\
+         tool = \"cargo\"\ninstalled = {{ commit = \"old\", request = \"old\" }}\n\n{keep}"
+    ));
+    fs::set_permissions(harness.kit_file(), fs::Permissions::from_mode(0o640)).unwrap();
+
+    let output = harness.run(&["kit", "remove", "git@github.com:owner/tool.git"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "");
+    assert!(stderr(&output).contains("untracked: Owner/Tool → "));
+    let text = fs::read_to_string(harness.kit_file()).unwrap();
+    assert!(text.starts_with("# my kit\n"), "{text}");
+    assert!(text.contains(keep), "{text}");
+    assert!(!text.contains("Owner/Tool"), "{text}");
+    assert!(!text.contains("commit = \"old\""), "{text}");
+    assert_eq!(
+        fs::metadata(harness.kit_file())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o640
+    );
+    for program in ["cargo", "git", "gh"] {
+        assert!(!harness.was_invoked(program));
+    }
+}
+
+#[test]
+fn kit_rm_defaults_to_the_current_directory_and_can_leave_an_empty_kit() {
+    let harness = Harness::new(&[]);
+    let repository = fs::canonicalize(&harness.work).unwrap();
+    harness.write_kit(&format!(
+        "[[install]]\nrepospec = {:?}\ntool = \"cargo\"\n",
+        repository.to_str().unwrap()
+    ));
+    let binary = harness.bin.join("installed-tool");
+    fs::write(&binary, "keep the installed binary\n").unwrap();
+
+    let output = harness.run(&["-qq", "k", "rm"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "");
+    assert_eq!(stderr(&output), "");
+    assert_eq!(
+        fs::read_to_string(&binary).unwrap(),
+        "keep the installed binary\n"
+    );
+    let list = harness.run(&["kit", "list"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    assert_eq!(stdout(&list), "");
+
+    let add = harness.run(&["kit", "add", "--no-install", "owner/replacement"]);
+    assert!(add.status.success(), "{}", stderr(&add));
+    let list = harness.run(&["kit", "list"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    assert_eq!(stdout(&list), "dtr install owner/replacement\n");
+}
+
+#[test]
+fn kit_remove_matches_home_relative_paths_even_after_a_checkout_is_deleted() {
+    let harness = Harness::new(&[]);
+    harness.write_kit("[[install]]\nrepospec = \"~/dtr-fixture-missing/repo\"\n");
+    let repository = home::home_dir().unwrap().join("dtr-fixture-missing/repo");
+    let output = harness.run(&["kit", "remove", repository.to_str().unwrap()]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        !fs::read_to_string(harness.kit_file())
+            .unwrap()
+            .contains("repospec")
+    );
+}
+
+#[test]
+fn kit_remove_dry_run_and_alternate_file_leave_the_default_kit_untouched() {
+    let harness = Harness::new(&[]);
+    let original = "[[install]]\nrepospec = \"owner/default\"\n";
+    harness.write_kit(original);
+    let alternate = harness.work.join("alternate.toml");
+    let tracked = "[[install]]\nrepospec = \"owner/other\"\n";
+    fs::write(&alternate, tracked).unwrap();
+    let args = ["k", "rm", "--file", "alternate.toml", "owner/other"];
+    let output = harness.command(&args).arg("-n").output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "untrack: owner/other → alternate.toml\n");
+    assert_eq!(fs::read_to_string(&alternate).unwrap(), tracked);
+    assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), original);
+
+    let output = harness.run(&args);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!fs::read_to_string(&alternate).unwrap().contains("repospec"));
+    assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), original);
+}
+
+#[test]
+fn kit_remove_reports_missing_entries_and_rejects_invalid_configuration_without_writing() {
+    let harness = Harness::new(&[]);
+    let missing = harness.run(&["kit", "remove", "owner/tool"]);
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(!harness.kit_file().exists());
+
+    let original = "[[install]]\nrepospec = \"owner/keep\"\n";
+    harness.write_kit(original);
+    for flags in [Vec::new(), vec!["-n"]] {
+        let output = harness
+            .command(&["kit", "remove", "owner/tool"])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(stderr(&output).contains("is not tracked in kit configuration"));
+        assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), original);
+    }
+
+    let invalid = "[[install]]\nrepospec = \"owner/keep\"\nunknown = true\n";
+    harness.write_kit(invalid);
+    let output = harness.run(&["kit", "remove", "owner/keep"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("unknown field `unknown`"));
+    assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), invalid);
+}
+
+#[test]
+fn kit_remove_dry_run_does_not_migrate_the_legacy_configuration() {
+    let harness = Harness::new(&[]);
+    let legacy = "[[install]]\nrepospec = \"owner/legacy\"\n";
+    harness.write_legacy_kit(legacy);
+    let output = harness.run(&["kit", "remove", "-n", "owner/legacy"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!harness.kit_file().exists());
+    assert_eq!(
+        fs::read_to_string(harness.legacy_kit_file()).unwrap(),
+        legacy
+    );
+
+    let output = harness.run(&["kit", "remove", "owner/legacy"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(harness.kit_file().exists());
+    assert!(!harness.legacy_kit_file().exists());
 }
 
 #[test]

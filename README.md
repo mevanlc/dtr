@@ -477,14 +477,16 @@ updated without installing or writing it.
 
 ```text
 dtr [--dry-run|-n] [-q...] [-v...] kit|k add|a [--no-install] [-t|--tool <tool>] [--no-latest] [--main] [<dtr-repospec>] [-- <install-arg>...]
+dtr [--dry-run|-n] [-q...] [-v...] kit|k remove|rm [--file <FILE>] [<dtr-repospec>]
 dtr [--dry-run|-n] [-q...] [-v...] kit|k install|i [-j|--jobs <n|auto>] [--force] [--file <FILE>]
 dtr kit|k list|ls [--file <FILE>]
 dtr [--dry-run|-n] kit|k edit|e [--file <FILE>]
 ```
 
 `k` is a visible alias for `kit`; within that namespace, `i` aliases `install`,
-`ls` aliases `list`, `a` aliases `add`, and `e` aliases `edit`. The aliases can be
-combined as `dtr k a`, `dtr k i`, `dtr k ls`, and `dtr k e`.
+`ls` aliases `list`, `a` aliases `add`, `rm` aliases `remove`, and `e` aliases
+`edit`. The aliases can be combined as `dtr k a`, `dtr k rm`, `dtr k i`,
+`dtr k ls`, and `dtr k e`.
 
 `kit add` installs one repository and then tracks it, so `dtr kit add <spec>`
 is equivalent to `dtr install --add <spec>`. Its repository, tool, Go-version,
@@ -493,6 +495,16 @@ defaults to the current directory. Add `--no-install` to track the repository
 without invoking its installer; `-i`/`--install` states the default explicitly
 and conflicts with `--no-install`. Dry-run mode reports the kit file without
 installing or changing it.
+
+`kit remove` deletes the matching entry and its generated install state from the
+kit; installed binaries and repository files stay in place. The repository
+defaults to the current directory, so `dtr k rm` stops tracking the current
+checkout. It uses the same normalized repository identity as `kit add`, accepts
+`~/` paths even for deleted checkouts, and needs no installer or network access.
+For example, `dtr kit remove owner/tool` also matches an entry stored as
+`https://github.com/owner/tool.git`. An untracked repository is an error and
+leaves the kit unchanged. Dry-run mode prints the entry it would remove without
+writing the file. Changes are atomic and preserve other entries and their comments.
 
 `kit install` reads `<user-home>/.config/dtr/kit.toml` and plans each
 `[[install]]` entry in file order. `DTR_CONFIG_DIR` overrides the containing
@@ -535,10 +547,11 @@ renames a sibling `install-all.toml` to `kit.toml` when `kit.toml` does not yet
 exist. If both files exist, dtr uses `kit.toml` and leaves `install-all.toml`
 untouched. Dry-run mode and explicit `--file` paths do not perform this migration.
 
-`--file FILE` selects an alternate kit TOML file for install, list, or edit.
+`--file FILE` selects an alternate kit TOML file for remove, install, list, or edit.
 `kit list` prints each tracked entry as a shell-safe, reusable
 `dtr install ...` command without invoking an installer; generated install state
-is not included in that command. `kit edit` launches
+is not included in that command. An empty kit lists no commands, including after
+removing its last entry. `kit edit` launches
 the first configured or available editor in this order:
 `DTR_EDITOR`, `VISUAL`, `EDITOR`, `vim`, then `vi`. Environment-provided editor
 commands may contain quoted arguments, such as `DTR_EDITOR='code --wait'`. Dtr

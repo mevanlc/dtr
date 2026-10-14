@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value, value};
 
-use crate::cli::{InstallArgs, InstallTool, Jobs, KitArgs, KitCommand};
+use crate::cli::{InstallArgs, InstallTool, Jobs, KitArgs, KitCommand, KitRemoveArgs};
 use crate::command::{
     CommandPlan, DtrMessage, GitReference, InstallRevision, InterruptState, apply_environment,
     config_parent, display_path, edit_file, friendly_path, shell_quote_argument,
@@ -194,6 +194,7 @@ pub(crate) fn run(
             );
         }
         KitCommand::List(args) => return list(&selected_file_path(args.file, !dry_run)?),
+        KitCommand::Remove(args) => return run_remove(args, dry_run, verbosity_adjustment),
         KitCommand::Edit(args) => {
             let path = selected_file_path(args.file, !dry_run)?;
             let base = Config::load_for_runtime()
@@ -428,6 +429,52 @@ fn run_add(
         verbosity,
         true,
     )?;
+    Ok(0)
+}
+
+fn run_remove(
+    args: KitRemoveArgs,
+    dry_run: bool,
+    verbosity_adjustment: i32,
+) -> Result<i32, DtrError> {
+    let path = selected_file_path(args.file, !dry_run)?;
+    let loaded = load_config(&path, false)?;
+    let home = home::home_dir();
+    let exact = loaded
+        .config
+        .install
+        .iter()
+        .position(|entry| OsStr::new(&entry.repospec) == args.repospec);
+    let index = match exact {
+        Some(index) => Some(index),
+        None => {
+            let identity = normalized_repospec_identity(&args.repospec, home.as_deref())?;
+            loaded.config.install.iter().position(|entry| {
+                normalized_repository_identity(entry, home.as_deref())
+                    .is_ok_and(|tracked| tracked == identity)
+            })
+        }
+    }
+    .ok_or_else(|| {
+        DtrError::new(format!(
+            "repository {:?} is not tracked in kit configuration {}",
+            args.repospec,
+            path.display()
+        ))
+    })?;
+    let entry = &loaded.config.install[index];
+    if dry_run {
+        println!("untrack: {} → {}", entry.repospec, display_path(&path));
+        return Ok(0);
+    }
+
+    let verbosity = Verbosity::load(verbosity_adjustment)?;
+    let message = format!("untracked: {} → {}", entry.repospec, display_path(&path));
+    let text = remove_entry(loaded.text, index)?;
+    write_atomic(&path, &text)?;
+    if verbosity.results() {
+        eprintln!("{message}");
+    }
     Ok(0)
 }
 
@@ -739,7 +786,17 @@ fn normalized_repository_identity(
     entry: &InstallEntry,
     home: Option<&Path>,
 ) -> Result<RepositoryIdentity, DtrError> {
-    let repospec = expand_home(entry.repospec.clone(), home)?;
+    normalized_repospec_identity(OsStr::new(&entry.repospec), home)
+}
+
+fn normalized_repospec_identity(
+    repospec: &OsStr,
+    home: Option<&Path>,
+) -> Result<RepositoryIdentity, DtrError> {
+    let repospec = match repospec.to_str() {
+        Some(text) => expand_home(text.to_owned(), home)?,
+        None => repospec.to_owned(),
+    };
     let identity = InstallSource::parse(&repospec)?.spec.repository_identity();
     Ok(match identity {
         RepositoryIdentity::Local(path) => RepositoryIdentity::Local(normalize_local_path(&path)),
@@ -776,7 +833,7 @@ fn normalize_local_path(path: &Path) -> PathBuf {
 
 fn list(path: &Path) -> Result<i32, DtrError> {
     let home = home::home_dir();
-    for entry in load_required(path)?.config.install {
+    for entry in load_config(path, false)?.config.install {
         println!("{}", render_install_command(&entry, home.as_deref())?);
     }
     Ok(0)
@@ -1268,6 +1325,34 @@ fn replace_entry(text: String, index: usize, entry: &InstallEntry) -> Result<Str
     Ok(document.to_string())
 }
 
+fn remove_entry(text: String, index: usize) -> Result<String, DtrError> {
+    let mut document = text.parse::<DocumentMut>().map_err(|error| {
+        DtrError::new(format!(
+            "could not edit the existing kit configuration: {error}"
+        ))
+    })?;
+    let entries = document
+        .get_mut("install")
+        .and_then(Item::as_array_of_tables_mut)
+        .filter(|entries| index < entries.len())
+        .ok_or_else(|| DtrError::new("could not locate the existing kit entry to remove"))?;
+    let removed = entries.remove(index);
+    // The parser attaches the file's opening comments to its first table.
+    let header = if index == 0 {
+        removed
+            .decor()
+            .prefix()
+            .and_then(|prefix| prefix.as_str())
+            .unwrap_or_default()
+    } else {
+        ""
+    };
+    if entries.is_empty() {
+        document.remove("install");
+    }
+    Ok(format!("{header}{document}"))
+}
+
 fn installed_value(installed: &InstalledState) -> Value {
     let mut table = InlineTable::new();
     table.insert("commit", Value::from(installed.commit.as_str()));
@@ -1427,6 +1512,44 @@ mod tests {
         assert_eq!(
             append_entry("# keep this comment\n".to_owned(), &entry).unwrap(),
             "# keep this comment\n\n[[install]]\nrepospec = \"~/p/my/tool\"\n"
+        );
+    }
+
+    #[test]
+    fn removal_preserves_file_comments_and_each_remaining_entry() {
+        let header = "# installation kit\n\n";
+        let entries = [
+            "[[install]] # first\nrepospec = 'owner/one' # inline\n",
+            "\n# second entry\n[[install]]\nrepospec = 'owner/two'\n\n\
+             [install.installed]\ncommit = 'old'\nrequest = 'old'\n",
+            "\n# third entry\n[[install]]\nrepospec = 'owner/three'\n",
+        ];
+        let footer = "\n# end of kit\n";
+        let text = format!("{header}{}{footer}", entries.concat());
+        for index in 0..entries.len() {
+            let removed = remove_entry(text.clone(), index).unwrap();
+            assert!(removed.starts_with(header), "{removed}");
+            assert!(removed.ends_with(footer), "{removed}");
+            for (other, entry) in entries.iter().enumerate() {
+                if other != index {
+                    assert!(removed.contains(entry), "{removed}");
+                }
+            }
+            let parsed: KitConfig = toml::from_str(&removed).unwrap();
+            assert_eq!(parsed.install.len(), 2);
+            assert!(!parsed.install.iter().any(|entry| {
+                entry.repospec == ["owner/one", "owner/two", "owner/three"][index]
+            }));
+        }
+
+        let text = format!("{header}{}{footer}", entries[0]);
+        let removed = remove_entry(text, 0).unwrap();
+        assert_eq!(removed, format!("{header}{footer}"));
+        assert!(
+            toml::from_str::<KitConfig>(&removed)
+                .unwrap()
+                .install
+                .is_empty()
         );
     }
 
