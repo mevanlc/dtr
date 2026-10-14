@@ -86,6 +86,7 @@ jobs:
       - name: Release helper tests and workflow lint
         run: |
           uv run scripts/test_release.py
+          sh scripts/test-cargo-target-cache.sh
           actionlint
       - name: Stamp version
         env:

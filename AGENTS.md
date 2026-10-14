@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+For CFARM remote builds, read `../cfarm/README.md` and
+`../cfarm/hosts/cfarm240.md` when that sibling checkout is available. They record
+the shared host/toolchain setup, home-directory constraint, and SSH reuse rules.
+
 ## Project Structure & Module Organization
 
 `dtr` is a single Rust 2024 CLI crate. `src/main.rs` is the thin executable

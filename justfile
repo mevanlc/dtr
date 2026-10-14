@@ -8,5 +8,6 @@ check:
     cargo test --doc --locked
     cargo check --locked
     uv run scripts/test_release.py
+    sh scripts/test-cargo-target-cache.sh
     actionlint
     git diff --check

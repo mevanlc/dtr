@@ -41,6 +41,9 @@ ssh_options=(
     -o ConnectionAttempts=1
     -o ServerAliveInterval=10
     -o ServerAliveCountMax=3
+    -o ControlMaster=auto
+    -o ControlPersist=60
+    -o "ControlPath=$probe_dir/control"
     -o StrictHostKeyChecking=accept-new
     -o "UserKnownHostsFile=$probe_dir/known_hosts"
 )
@@ -56,6 +59,7 @@ REMOTE_CLEANUP
             status=1
         fi
     fi
+    ssh "${ssh_options[@]}" -O exit "$destination" >/dev/null 2>&1 || true
     rm -rf -- "$probe_dir"
     exit "$status"
 }

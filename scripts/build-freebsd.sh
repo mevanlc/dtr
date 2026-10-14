@@ -2,6 +2,15 @@
 # Run from a source snapshot under the remote account's home directory.
 set -eu
 
+case "${1:-}" in
+    ''|--prune-target) ;;
+    *) echo 'Usage: sh scripts/build-freebsd.sh [--prune-target]' >&2; exit 1 ;;
+esac
+if [ "$#" -gt 1 ]; then
+    echo 'Usage: sh scripts/build-freebsd.sh [--prune-target]' >&2
+    exit 1
+fi
+
 if [ "$(uname -s)" != FreeBSD ]; then
     echo 'This build script requires FreeBSD.' >&2
     exit 1
@@ -21,7 +30,22 @@ CARGO_BUILD_JOBS=2
 TMPDIR="$build_root/tmp"
 XDG_CACHE_HOME="$build_root/cache"
 export PATH CARGO_HOME CARGO_TARGET_DIR CARGO_BUILD_JOBS TMPDIR XDG_CACHE_HOME
-mkdir -p "$CARGO_TARGET_DIR" "$TMPDIR" "$XDG_CACHE_HOME" "$build_root/artifacts"
+mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$build_root/artifacts"
+# shellcheck source=scripts/cargo-target-cache.sh
+. ./scripts/cargo-target-cache.sh
+lock_cargo_target "$CARGO_TARGET_DIR"
+prune_cargo_target "$CARGO_TARGET_DIR"
+if [ "${1:-}" = --prune-target ]; then exit 0; fi
+finish_build() {
+    build_status=$?
+    trap - 0
+    if ! prune_cargo_target "$CARGO_TARGET_DIR"; then
+        if [ "$build_status" -eq 0 ]; then build_status=1; fi
+    fi
+    exit "$build_status"
+}
+trap finish_build 0
+mkdir -p "$CARGO_TARGET_DIR"
 
 # CheriBSD's default cc uses the capability ABI. Rust's FreeBSD ARM64
 # toolchain needs the conventional ABI, libraries, and linker mode.

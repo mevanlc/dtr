@@ -111,6 +111,19 @@ On CheriBSD ARM64, the script creates a home-local `cc` wrapper selecting the
 conventional ARM64 ABI, libraries, and linker mode, retaining FreeBSD's standard
 `/libexec/ld-elf.so.1` interpreter. The system compiler is unchanged.
 
+The target cache is checked before each build and on exit, including failures.
+At 3 GB (3,000,000,000 bytes of disk usage), Cargo's entire target cache is
+cleared; it can temporarily exceed that limit during a build. Saved binaries,
+logs, sources, and the shared compiler under `$HOME/.cargo` are outside that
+cache. Build and pruning operations hold a persistent lock outside the target
+directory. To run the same size check without building, use
+`sh scripts/build-freebsd.sh --prune-target`.
+The cache helper can be reused by other projects, with a limit and lock per
+target directory. A shared target directory shares the same budget and lock.
+
+Host setup and cross-project notes live in the local sibling repository at
+`~/p/my/cfarm/README.md`.
+
 Crate verification compiles the packaged source and installs from its unpacked
 contents. Before publishing, the upload job recreates the crate and checks its
 SHA-256 against the verified CI artifact. Its `cargo publish --no-verify` skips
