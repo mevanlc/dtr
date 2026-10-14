@@ -469,6 +469,53 @@ fn descendants_do_not_adopt_their_ancestors_lock_descriptors() {
 }
 
 #[test]
+fn cargo_build_interrupt_status_cancels_self_install_and_releases_locks() {
+    #[cfg(not(windows))]
+    let codes = [130];
+    #[cfg(windows)]
+    let codes = [130, 0xC000_013Au32 as i32];
+    for code in codes {
+        let harness = Harness::new();
+        let output = harness
+            .install()
+            .env("DTR_FIXTURE_BUILD_EXIT", code.to_string())
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "{code}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!harness.directory.path().join("install.args").exists());
+        harness.assert_intact();
+        success(harness.install().output().unwrap());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sigint_terminated_cargo_cancels_without_the_parent_signal_callback() {
+    for stage in ["metadata", "build"] {
+        let harness = Harness::new();
+        let output = harness
+            .install()
+            .env("DTR_FIXTURE_INTERRUPT_STAGE", stage)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "{stage}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!harness.directory.path().join("install.args").exists());
+        harness.assert_intact();
+        success(harness.install().output().unwrap());
+    }
+}
+
+#[test]
 fn console_interrupt_during_build_and_install_returns_130_and_recovers() {
     for stage in ["build", "install"] {
         let harness = Harness::new();
@@ -476,7 +523,7 @@ fn console_interrupt_during_build_and_install_returns_130_and_recovers() {
         command
             .env("DTR_FIXTURE_WAIT", stage)
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(fs::File::create(harness.directory.path().join("interrupt.stderr")).unwrap());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -511,14 +558,20 @@ fn console_interrupt_during_build_and_install_returns_130_and_recovers() {
             thread::sleep(Duration::from_millis(10));
         };
         #[cfg(windows)]
-        assert_eq!(status.code(), Some(130));
+        assert_eq!(
+            status.code(),
+            Some(130),
+            "{stage}: {}",
+            harness.log("interrupt.stderr")
+        );
         #[cfg(unix)]
         {
             use std::os::unix::process::ExitStatusExt;
             assert!(
                 status.code() == Some(130)
                     || (stage == "install" && status.signal() == Some(libc::SIGINT)),
-                "{status:?}"
+                "{stage}: {status:?}\n{}",
+                harness.log("interrupt.stderr")
             );
         }
         harness.assert_intact();

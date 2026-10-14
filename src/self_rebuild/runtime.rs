@@ -2,7 +2,7 @@ use std::env;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -164,7 +164,32 @@ struct Package {
     manifest_path: PathBuf,
 }
 
-fn metadata(package_root: &Path, verbosity: Verbosity) -> Result<Metadata, DtrError> {
+enum CargoOutcome<T> {
+    Completed(T),
+    Interrupted,
+}
+
+fn was_interrupted(status: ExitStatus) -> bool {
+    if status.code() == Some(130) {
+        return true;
+    }
+    // STATUS_CONTROL_C_EXIT: Windows console termination by Ctrl-C/Ctrl-Break.
+    #[cfg(windows)]
+    if status.code() == Some(0xC000_013Au32 as i32) {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal() == Some(libc::SIGINT)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+fn metadata(package_root: &Path, verbosity: Verbosity) -> Result<CargoOutcome<Metadata>, DtrError> {
     let output = Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version=1"])
         .arg("--manifest-path")
@@ -181,12 +206,16 @@ fn metadata(package_root: &Path, verbosity: Verbosity) -> Result<Metadata, DtrEr
         if !verbosity.progress() {
             eprint!("{}", String::from_utf8_lossy(&output.stderr));
         }
+        if was_interrupted(output.status) {
+            return Ok(CargoOutcome::Interrupted);
+        }
         return Err(DtrError::new(format!(
             "cargo metadata for dtr exited with status {}",
             output.status.code().unwrap_or(1)
         )));
     }
     serde_json::from_slice(&output.stdout)
+        .map(CargoOutcome::Completed)
         .map_err(|error| DtrError::new(format!("invalid cargo metadata for dtr: {error}")))
 }
 
@@ -213,7 +242,7 @@ fn build_example(
     package_root: &Path,
     package_id: &str,
     verbosity: Verbosity,
-) -> Result<PathBuf, DtrError> {
+) -> Result<CargoOutcome<PathBuf>, DtrError> {
     let mut captured = if verbosity.progress() {
         None
     } else {
@@ -281,6 +310,11 @@ fn build_example(
     {
         output.replay()?;
     }
+    // The signal callback runs on another thread and may not have updated its
+    // flag yet. Cargo's own termination status is sufficient to cancel.
+    if was_interrupted(status) {
+        return Ok(CargoOutcome::Interrupted);
+    }
     if let Some(error) = read_error {
         return Err(DtrError::new(format!(
             "could not process cargo build output: {error}"
@@ -294,6 +328,7 @@ fn build_example(
     }
     executable
         .filter(|path| path.is_absolute() && path.is_file())
+        .map(CargoOutcome::Completed)
         .ok_or_else(|| DtrError::new("cargo did not report an existing dtr-trampoline executable"))
 }
 
@@ -328,7 +363,10 @@ fn execute_inner(
     if interrupted.is_interrupted() {
         return Ok(130);
     }
-    let metadata = metadata?;
+    let CargoOutcome::Completed(metadata) = metadata? else {
+        interrupted.request_interrupt();
+        return Ok(130);
+    };
     let package = metadata
         .packages
         .iter()
@@ -345,7 +383,10 @@ fn execute_inner(
     if interrupted.is_interrupted() {
         return Ok(130);
     }
-    let executable = executable?;
+    let CargoOutcome::Completed(executable) = executable? else {
+        interrupted.request_interrupt();
+        return Ok(130);
+    };
     let mut command = Command::new(&executable);
     command
         .args(env::args_os().skip(1))

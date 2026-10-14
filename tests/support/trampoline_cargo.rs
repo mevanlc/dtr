@@ -37,6 +37,18 @@ fn main() {
         env::var("DTR_SELF_LOCKS").unwrap_or_default(),
     )
     .unwrap();
+    #[cfg(unix)]
+    if env::var("DTR_FIXTURE_INTERRUPT_STAGE").ok().as_deref() == Some(stage) {
+        // Signal only this child: the parent's Ctrl-C callback never runs.
+        // This deterministically covers observing Cargo's exit before that callback.
+        let status = process::Command::new("/bin/kill")
+            .args(["-s", "INT"])
+            .arg(process::id().to_string())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        panic!("SIGINT did not terminate the Cargo fixture");
+    }
     hold(&root, stage);
     match stage {
         "metadata" => print!(

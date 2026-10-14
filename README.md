@@ -79,6 +79,9 @@ normal installation. It is excluded from ordinary `cargo install`; there is
 no additional installed command or temporary executable copy. Cargo's reported
 artifact path is used, including when a custom target directory is configured.
 
+Interrupting Cargo metadata lookup or helper compilation returns exit status
+`130`, releases the self-install locks, and leaves the current executable usable.
+
 Another self-install using the same build directory or running executable
 fails immediately with `self-install already in progress`. On Windows, dtr
 renames its running executable to `dtr.exe.old` and waits for the helper. If
