@@ -105,7 +105,8 @@ sets PATH explicitly, checks the compiler version, and keeps Cargo caches,
 build output, temporary files, and the resulting binary under `$HOME`. It uses
 two build jobs on the shared host and runs formatting, Clippy, tests (including
 real isolated self-installation), doctests, and a release-binary smoke check.
-Nextest is used when available, with the Cargo test harness as a fallback.
+Nextest is used when available, with a serial Cargo test harness as a fallback
+to avoid executable-fixture `ETXTBSY` races on CheriBSD.
 On CheriBSD ARM64, the script creates a home-local `cc` wrapper selecting the
 conventional ARM64 ABI, libraries, linker mode, and `/libexec/ld-elf64.so.1`
 loader required by the official Rust toolchain. The system compiler is unchanged.

@@ -53,7 +53,9 @@ if command -v cargo-nextest >/dev/null 2>&1; then
     cargo nextest run --locked --run-ignored only -E 'test(real_cargo_repeated_self_install)'
 else
     echo 'Nextest is unavailable; using the Cargo test harness.'
-    cargo test --locked --all-targets
+    # Concurrent executable-fixture copies and forks hit ETXTBSY on CheriBSD.
+    # Nextest isolates tests in separate processes; serialize the fallback.
+    cargo test --locked --all-targets -- --test-threads=1
     cargo test --locked --test trampoline real_cargo_repeated_self_install_keeps_only_dtr_installed -- --ignored --exact
 fi
 cargo test --locked --doc

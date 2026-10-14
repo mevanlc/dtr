@@ -1,10 +1,9 @@
 use std::env;
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::cli::InstallTool;
-use crate::kit::InstallEntry;
+use crate::kit::{InstallEntry, expand_home};
 use crate::repospec::RepoSpec;
 
 pub(crate) const DTR_SELF_REEXEC: &str = "DTR_SELF_REEXEC";
@@ -24,18 +23,21 @@ pub(crate) fn current_exe_is_dtr() -> bool {
     file_name.eq_ignore_ascii_case("dtr") || file_name.eq_ignore_ascii_case("dtr.exe")
 }
 
-pub(crate) fn is_self_install_entry(entry: &InstallEntry) -> bool {
+pub(crate) fn is_self_install_entry(entry: &InstallEntry, home: Option<&Path>) -> bool {
     if is_self_reexec() || !current_exe_is_dtr() {
         return false;
     }
     if !matches!(entry.tool, InstallTool::Auto | InstallTool::Cargo) {
         return false;
     }
-    is_dtr_target(&entry.repospec)
+    is_dtr_target(&entry.repospec, home)
 }
 
-pub(crate) fn is_dtr_target(repospec_str: &str) -> bool {
-    let Ok(spec) = RepoSpec::parse(OsStr::new(repospec_str)) else {
+pub(crate) fn is_dtr_target(repospec_str: &str, home: Option<&Path>) -> bool {
+    let Ok(repospec) = expand_home(repospec_str.to_owned(), home) else {
+        return false;
+    };
+    let Ok(spec) = RepoSpec::parse(&repospec) else {
         return is_dtr_repospec_name(repospec_str);
     };
     if let Some(path) = spec.local_path() {
@@ -68,8 +70,12 @@ fn is_dtr_repospec_name(repospec: &str) -> bool {
         || normalized.ends_with("/dtr")
 }
 
-pub(crate) fn resolve_local_package_root(repospec_str: &str) -> Option<PathBuf> {
-    let spec = RepoSpec::parse(OsStr::new(repospec_str)).ok()?;
+pub(crate) fn resolve_local_package_root(
+    repospec_str: &str,
+    home: Option<&Path>,
+) -> Option<PathBuf> {
+    let repospec = expand_home(repospec_str.to_owned(), home).ok()?;
+    let spec = RepoSpec::parse(&repospec).ok()?;
     let path = spec.local_path()?;
     if path.join("Cargo.toml").exists() {
         Some(path.to_path_buf())
@@ -126,10 +132,10 @@ mod tests {
         )
         .unwrap();
 
-        let root = resolve_local_package_root(dir.path().to_str().unwrap());
+        let root = resolve_local_package_root(dir.path().to_str().unwrap(), None);
         assert_eq!(root, Some(dir.path().to_path_buf()));
 
-        let invalid = resolve_local_package_root("https://github.com/mevanlc/dtr");
+        let invalid = resolve_local_package_root("https://github.com/mevanlc/dtr", None);
         assert_eq!(invalid, None);
     }
 
@@ -143,8 +149,33 @@ mod tests {
         )
         .unwrap();
 
-        assert!(is_dtr_target(dir.path().to_str().unwrap()));
-        assert!(is_dtr_target("mevanlc/dtr"));
-        assert!(!is_dtr_target("user/other-tool"));
+        assert!(is_dtr_target(dir.path().to_str().unwrap(), None));
+        assert!(is_dtr_target("mevanlc/dtr", None));
+        assert!(!is_dtr_target("user/other-tool", None));
+    }
+
+    #[test]
+    fn home_relative_self_installs_resolve_the_manifest_and_package_root() {
+        let home = tempfile::tempdir().unwrap();
+        let checkout = home.path().join("checkout space λ");
+        fs::create_dir(&checkout).unwrap();
+        for root in [home.path(), checkout.as_path()] {
+            fs::write(
+                root.join("Cargo.toml"),
+                "[package]\nname = 'dtr'\nversion = '0.0.0'\n",
+            )
+            .unwrap();
+        }
+
+        for (repospec, root) in [
+            ("~", home.path()),
+            ("~/checkout space λ", checkout.as_path()),
+        ] {
+            assert!(is_dtr_target(repospec, Some(home.path())));
+            assert_eq!(
+                resolve_local_package_root(repospec, Some(home.path())),
+                Some(root.to_path_buf())
+            );
+        }
     }
 }

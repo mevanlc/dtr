@@ -364,8 +364,9 @@ pub(crate) fn run(
     if !dry_run {
         if let Some(self_job) = jobs
             .iter()
-            .find(|job| self_rebuild::is_self_install_entry(&job.entry))
-            && let Some(package_root) = self_rebuild::resolve_local_package_root(&self_job.repospec)
+            .find(|job| self_rebuild::is_self_install_entry(&job.entry, home.as_deref()))
+            && let Some(package_root) =
+                self_rebuild::resolve_local_package_root(&self_job.repospec, home.as_deref())
         {
             return self_rebuild::execute(&package_root, interrupted.clone(), verbosity);
         }
@@ -456,8 +457,9 @@ pub(crate) fn run_install_and_add(
         return Ok(0);
     }
 
-    if self_rebuild::is_self_install_entry(&entry)
-        && let Some(package_root) = self_rebuild::resolve_local_package_root(&entry.repospec)
+    if self_rebuild::is_self_install_entry(&entry, home.as_deref())
+        && let Some(package_root) =
+            self_rebuild::resolve_local_package_root(&entry.repospec, home.as_deref())
     {
         return self_rebuild::execute(&package_root, None, verbosity);
     }
@@ -1342,7 +1344,7 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), DtrError> {
     Ok(())
 }
 
-fn expand_home(repospec: String, home: Option<&Path>) -> Result<OsString, DtrError> {
+pub(crate) fn expand_home(repospec: String, home: Option<&Path>) -> Result<OsString, DtrError> {
     let suffix = if repospec == "~" {
         Some("")
     } else {

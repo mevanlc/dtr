@@ -80,9 +80,9 @@ fn run() -> Result<i32, DtrError> {
             if !dry_run
                 && let home = home::home_dir()
                 && let Ok((entry, _)) = kit::InstallEntry::from_install_args(&args, home.as_deref())
-                && self_rebuild::is_self_install_entry(&entry)
+                && self_rebuild::is_self_install_entry(&entry, home.as_deref())
                 && let Some(package_root) =
-                    self_rebuild::resolve_local_package_root(&entry.repospec)
+                    self_rebuild::resolve_local_package_root(&entry.repospec, home.as_deref())
             {
                 return self_rebuild::execute(&package_root, None, verbosity);
             }

@@ -68,6 +68,8 @@ Release tags supply the version; checkout builds report `0.0.0`. See
 `dtr install .` can rebuild and reinstall dtr itself on macOS, Linux, and
 Windows. This also works through `install --add`, `kit add`, and a local dtr
 entry in `kit install`.
+Checkouts under your home directory also use this handoff when their kit entry
+is stored as `~/...`.
 
 Dtr builds its internal `dtr-trampoline` example for the host platform, then
 runs it directly from Cargo's output directory with the original arguments and
