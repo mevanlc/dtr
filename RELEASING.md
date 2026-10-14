@@ -108,8 +108,8 @@ real isolated self-installation), doctests, and a release-binary smoke check.
 Nextest is used when available, with a serial Cargo test harness as a fallback
 to avoid executable-fixture `ETXTBSY` races on CheriBSD.
 On CheriBSD ARM64, the script creates a home-local `cc` wrapper selecting the
-conventional ARM64 ABI, libraries, linker mode, and `/libexec/ld-elf64.so.1`
-loader required by the official Rust toolchain. The system compiler is unchanged.
+conventional ARM64 ABI, libraries, and linker mode, retaining FreeBSD's standard
+`/libexec/ld-elf.so.1` interpreter. The system compiler is unchanged.
 
 Crate verification compiles the packaged source and installs from its unpacked
 contents. Before publishing, the upload job recreates the crate and checks its

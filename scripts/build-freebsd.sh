@@ -24,13 +24,13 @@ export PATH CARGO_HOME CARGO_TARGET_DIR CARGO_BUILD_JOBS TMPDIR XDG_CACHE_HOME
 mkdir -p "$CARGO_TARGET_DIR" "$TMPDIR" "$XDG_CACHE_HOME" "$build_root/artifacts"
 
 # CheriBSD's default cc uses the capability ABI. Rust's FreeBSD ARM64
-# toolchain needs the conventional ABI, libraries, linker mode, and loader.
+# toolchain needs the conventional ABI, libraries, and linker mode.
 # A PATH wrapper also covers tests that invoke rustc directly.
 if [ "$(uname -m)" = arm64 ] && /usr/bin/cc -dM -E -x c /dev/null | grep -q '__CHERI_PURE_CAPABILITY__'; then
     mkdir -p "$build_root/linker"
     cat > "$build_root/linker/cc" <<'LINKER'
 #!/bin/sh
-exec /usr/bin/cc -mabi=aapcs -Wl,-m,aarch64elf -Wl,--dynamic-linker,/libexec/ld-elf64.so.1 "$@"
+exec /usr/bin/cc -mabi=aapcs -Wl,-m,aarch64elf "$@"
 LINKER
     chmod 700 "$build_root/linker/cc"
     PATH="$build_root/linker:$PATH"
