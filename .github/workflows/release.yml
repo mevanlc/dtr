@@ -66,14 +66,14 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       version: ${{ needs.version.outputs.version }}
+    secrets:
+      CFARM_FBSD15_HOST: ${{ secrets.CFARM_FBSD15_HOST }}
+      CFARM_FBSD15_KEY: ${{ secrets.CFARM_FBSD15_KEY }}
 
-  stage:
+  bundle:
     needs: [version, build]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -102,10 +102,35 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 90
+
+  stage:
+    needs: [version, bundle]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: 0.12.23
+      - name: Install Python
+        run: uv python install "$UV_PYTHON"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-bundle
+          path: dist
       - name: Stage or reconcile GitHub draft
         env:
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
           GH_TOKEN: ${{ github.token }}
-        run: uv run scripts/release.py stage
+        run: |
+          uv run scripts/release.py stamp "$RELEASE_VERSION"
+          uv run scripts/release.py verify
+          uv run scripts/release.py stage
 
   publish:
     needs: [version, stage]

@@ -1,5 +1,6 @@
 /target
 /dist
+/.cfarm-artifacts/
 /scripts/__pycache__
 /.ruff_cache
 

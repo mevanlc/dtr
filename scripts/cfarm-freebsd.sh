@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
-# Probe a remote build host without installing a runner or changing its toolchain.
+# Use the home-local CFARM toolchain through SSH; never install a remote runner.
 set -euo pipefail
 umask 077
+
+mode=${1:-}
+if [[ $# != 1 || ! $mode =~ ^(probe|build)$ ]]; then
+    echo 'Usage: bash scripts/cfarm-freebsd.sh <probe|build>' >&2
+    exit 1
+fi
+cd "$(dirname "$0")/.."
+if [[ $mode == build ]]; then
+    release_version=$(uv run scripts/release.py version "${RELEASE_VERSION:?Set RELEASE_VERSION}")
+fi
 
 : "${CFARM_FBSD15_HOST:?Set CFARM_FBSD15_HOST}"
 : "${CFARM_FBSD15_KEY:?Set CFARM_FBSD15_KEY}"
@@ -44,8 +54,10 @@ ssh_options=(
     -o ControlMaster=auto
     -o ControlPersist=60
     -o "ControlPath=$probe_dir/control"
-    -o StrictHostKeyChecking=accept-new
-    -o "UserKnownHostsFile=$probe_dir/known_hosts"
+    -o StrictHostKeyChecking=yes
+    -o HostKeyAlias=cfarm-fbsd15
+    -o HostKeyAlgorithms=ssh-ed25519
+    -o "UserKnownHostsFile=$PWD/scripts/cfarm-known_hosts"
 )
 cleanup() {
     local status=$?
@@ -72,7 +84,7 @@ ssh-keygen -y -P '' -f "$probe_dir/key" > /dev/null
 echo 'Checking SSH authentication and remote build tools...'
 ssh "${ssh_options[@]}" "$destination" 'sh -s' <<'REMOTE'
 set -eu
-PATH="$HOME/.cargo/bin:/usr/local/bin:$PATH"
+PATH="$HOME/.cargo/bin:/usr/local64/bin:/usr/local/bin:$PATH"
 export PATH
 system=$(uname -s)
 printf 'Operating system: %s\n' "$system"
@@ -99,13 +111,13 @@ else
 fi
 REMOTE
 
-remote_dir=$(ssh "${ssh_options[@]}" "$destination" 'sh -s' <<'REMOTE_TEMP'
+remote_dir=$(ssh "${ssh_options[@]}" "$destination" sh -s "$mode" <<'REMOTE_TEMP'
 set -eu
 mkdir -p "$HOME/.local/share/dtr-ci/tmp"
-mktemp -d "$HOME/.local/share/dtr-ci/tmp/probe.XXXXXXXX"
+mktemp -d "$HOME/.local/share/dtr-ci/tmp/$1.XXXXXXXX"
 REMOTE_TEMP
 )
-if [[ ! $remote_dir =~ ^/[A-Za-z0-9/_.-]+/dtr-ci/tmp/probe\.[A-Za-z0-9]+$ ]]; then
+if [[ ! $remote_dir =~ ^/[A-Za-z0-9/_.-]+/dtr-ci/tmp/(probe|build)\.[A-Za-z0-9]+$ ]]; then
     remote_dir=''
     echo 'Unexpected remote temporary-directory path.' >&2
     exit 1
@@ -115,7 +127,53 @@ fi
 printf -v rsync_shell '%q ' ssh "${ssh_options[@]}"
 # Expand PATH on the FreeBSD host rather than on the runner.
 # shellcheck disable=SC2016
-rsync_path='PATH="/usr/local/bin:$PATH" rsync'
+rsync_path='PATH="/usr/local64/bin:/usr/local/bin:$PATH" rsync'
+if [[ $mode == build ]]; then
+    target=aarch64-unknown-freebsd
+    echo 'Uploading the stamped source snapshot...'
+    rsync --archive --rsh="$rsync_shell" --rsync-path="$rsync_path" \
+        --exclude=/.git/ --exclude=/target/ --exclude=/dist/ \
+        --exclude=/.cfarm-artifacts/ ./ "$destination:$remote_dir/source/"
+    ssh "${ssh_options[@]}" "$destination" sh -s "$remote_dir" <<'REMOTE_BUILD'
+set -eu
+if [ "$(uname -m)" != arm64 ]; then
+    echo 'Expected an ARM64 FreeBSD host.' >&2
+    exit 1
+fi
+cd "$1/source"
+sh scripts/build-freebsd.sh
+REMOTE_BUILD
+    mkdir -p "target/$target/release"
+    rsync --archive --rsh="$rsync_shell" --rsync-path="$rsync_path" \
+        "$destination:$remote_dir/source/.cfarm-artifacts/dtr" "target/$target/release/dtr"
+    binary="target/$target/release/dtr"
+    readelf --file-header "$binary" | grep -E 'Machine:.*AArch64'
+    readelf --program-headers "$binary" | grep -F '/libexec/ld-elf.so.1]'
+    uv run scripts/release.py archive "$target"
+    archive="dist/dtr-v$release_version-$target.tar.gz"
+    rsync --archive --rsh="$rsync_shell" --rsync-path="$rsync_path" \
+        "$archive" "$destination:$remote_dir/download.tar.gz"
+    echo 'Smoke-testing the packaged release download on CFARM...'
+    ssh "${ssh_options[@]}" "$destination" sh -s "$remote_dir" "$release_version" <<'REMOTE_SMOKE'
+set -eu
+mkdir "$1/smoke"
+tar -xzf "$1/download.tar.gz" -C "$1/smoke"
+binary="$1/smoke/dtr-v$2-aarch64-unknown-freebsd/dtr"
+actual=$("$binary" --version)
+if [ "$actual" != "dtr $2" ]; then
+    printf 'Unexpected packaged version: %s\n' "$actual" >&2
+    exit 1
+fi
+"$binary" --help >/dev/null
+REMOTE_SMOKE
+    echo 'FreeBSD ARM64 build and packaged smoke test passed.'
+    if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+        printf 'FreeBSD ARM64 built and tested on CFARM; packaged download passed version/help checks.\n' \
+            >> "$GITHUB_STEP_SUMMARY"
+    fi
+    exit 0
+fi
+
 printf 'dtr FreeBSD connectivity probe %s\n' "${GITHUB_RUN_ID:-local}" > "$probe_dir/sent.txt"
 echo 'Checking rsync upload and download...'
 rsync --archive --rsh="$rsync_shell" --rsync-path="$rsync_path" \

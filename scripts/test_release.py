@@ -20,6 +20,12 @@ import release
 
 
 class Versions(unittest.TestCase):
+    def test_hosted_matrix_excludes_cfarm_but_full_matrix_includes_it(self):
+        all_targets = {entry["target"] for entry in release.matrix()["include"]}
+        hosted = {entry["target"] for entry in release.matrix(hosted=True)["include"]}
+        self.assertEqual(all_targets - hosted, {"aarch64-unknown-freebsd"})
+        self.assertTrue(hosted < all_targets)
+
     def test_semver(self):
         for value in (
             "0.1.0",
@@ -111,6 +117,7 @@ class ProjectTest(unittest.TestCase):
         for target in (
             "x86_64-unknown-linux-musl",
             "x86_64-pc-windows-msvc",
+            "aarch64-unknown-freebsd",
         ):
             with self.subTest(target=target):
                 executable = "widget.exe" if "windows" in target else "widget"
@@ -231,6 +238,17 @@ class ProjectTest(unittest.TestCase):
         release.stamp("0.1.0")
         Path("dist").mkdir()
         with self.assertRaisesRegex(ValueError, "Unexpected artifact set"):
+            release.bundle()
+
+    def test_release_cannot_omit_the_freebsd_archive(self):
+        release.stamp("0.1.0")
+        Path("dist").mkdir()
+        freebsd = "widget-v0.1.0-aarch64-unknown-freebsd.tar.gz"
+        assets = release.expected_assets("widget", "0.1.0")
+        self.assertIn(freebsd, assets)
+        for filename in assets - {freebsd}:
+            Path("dist", filename).write_bytes(filename.encode())
+        with self.assertRaisesRegex(ValueError, freebsd):
             release.bundle()
 
     def test_bundle_rejects_different_commit_and_unexpected_files(self):

@@ -50,8 +50,9 @@ command:  gh repo clone https://github.com/mike-clark-8192/foo.git
 
 Release downloads go to [GitHub Releases](https://github.com/mevanlc/dtr/releases).
 Extract an archive and put `dtr` on your PATH. The release workflow builds Linux (static musl),
-macOS, and Windows for x64 and ARM64, plus Android ARM64. Android execution
-is not covered by hosted CI. FreeBSD release builds are deferred.
+macOS, and Windows for x64 and ARM64, plus Android ARM64 and FreeBSD ARM64.
+FreeBSD is built and tested on CFARM through SSH. Android execution
+is not covered by hosted CI.
 
 After the first crates.io publication, install with `cargo install dtr --locked`.
 From this checkout:

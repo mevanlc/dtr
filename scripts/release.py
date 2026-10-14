@@ -74,6 +74,14 @@ def targets():
     return json.loads(TARGETS_FILE.read_text())
 
 
+def matrix(hosted=False):
+    return {
+        "include": [
+            entry for entry in targets() if not hosted or entry["kind"] != "freebsd"
+        ]
+    }
+
+
 def toolchain():
     return tomllib.loads(Path("rust-toolchain.toml").read_text())["toolchain"][
         "channel"
@@ -585,8 +593,10 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("version", "tag", "stamp", "archive", "smoke", "verify-binaries"):
         commands.add_parser(command).add_argument("value")
+    commands.add_parser("matrix").add_argument(
+        "--hosted", action="store_true", help="Exclude remote CFARM builds"
+    )
     for command in (
-        "matrix",
         "toolchain",
         "bundle",
         "verify",
@@ -607,7 +617,7 @@ def main():
         case "stamp":
             stamp(args.value)
         case "matrix":
-            print(json.dumps({"include": targets()}, separators=(",", ":")))
+            print(json.dumps(matrix(args.hosted), separators=(",", ":")))
         case "toolchain":
             print(toolchain())
         case "archive":

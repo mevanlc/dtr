@@ -23,6 +23,7 @@ case "$(pwd -P)" in
 esac
 
 build_root="$HOME/.local/share/dtr-ci"
+artifact_dir="$(pwd -P)/.cfarm-artifacts"
 PATH="$HOME/.cargo/bin:$PATH"
 CARGO_HOME="$HOME/.cargo"
 CARGO_TARGET_DIR="$build_root/target"
@@ -30,7 +31,7 @@ CARGO_BUILD_JOBS=2
 TMPDIR="$build_root/tmp"
 XDG_CACHE_HOME="$build_root/cache"
 export PATH CARGO_HOME CARGO_TARGET_DIR CARGO_BUILD_JOBS TMPDIR XDG_CACHE_HOME
-mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$build_root/artifacts"
+mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$artifact_dir"
 # shellcheck source=scripts/cargo-target-cache.sh
 . ./scripts/cargo-target-cache.sh
 lock_cargo_target "$CARGO_TARGET_DIR"
@@ -86,5 +87,5 @@ cargo test --locked --doc
 cargo build --locked --release --bin dtr --example dtr-trampoline
 "$CARGO_TARGET_DIR/release/dtr" --version
 "$CARGO_TARGET_DIR/release/dtr" --help >/dev/null
-cp "$CARGO_TARGET_DIR/release/dtr" "$build_root/artifacts/dtr"
-printf 'FreeBSD validation passed; binary: %s/artifacts/dtr\n' "$build_root"
+cp "$CARGO_TARGET_DIR/release/dtr" "$artifact_dir/dtr"
+printf 'FreeBSD validation passed; binary: %s/dtr\n' "$artifact_dir"

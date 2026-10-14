@@ -33,4 +33,4 @@ jobs:
           CFARM_FBSD15_KEY: ${{ secrets.CFARM_FBSD15_KEY }}
           CFARM_FBSD15_SSH_USER: ${{ inputs.ssh_user }}
           CFARM_FBSD15_SSH_PORT: ${{ inputs.ssh_port }}
-        run: bash scripts/probe-freebsd.sh
+        run: bash scripts/cfarm-freebsd.sh probe

@@ -5,5 +5,6 @@
   {"target": "aarch64-apple-darwin", "os": "macos-26", "kind": "macos"},
   {"target": "x86_64-pc-windows-msvc", "os": "windows-2025", "kind": "windows"},
   {"target": "aarch64-pc-windows-msvc", "os": "windows-11-arm", "kind": "windows"},
-  {"target": "aarch64-linux-android", "os": "ubuntu-24.04", "kind": "android"}
+  {"target": "aarch64-linux-android", "os": "ubuntu-24.04", "kind": "android"},
+  {"target": "aarch64-unknown-freebsd", "os": "ubuntu-24.04", "kind": "freebsd"}
 ]

@@ -2,7 +2,7 @@
 
 This repository releases one Rust package containing the `dtr` command, following
 the [tuisv release setup](https://github.com/mevanlc/tuisv/blob/main/RELEASING.md).
-It publishes seven binary archives and one crate from the same commit.
+It publishes eight binary archives and one crate from the same commit.
 The Git tag supplies the version; committed package versions stay at `0.0.0`.
 
 ## Normal releases
@@ -57,10 +57,14 @@ without publishing credentials.
 
 Run Release manually with mode `build` and a version such as `0.1.0` or
 `0.2.0-rc.1`. This runs the complete build and package checks and stores Actions
-artifacts. Manual runs cannot create releases or publish crates.
+artifacts, including the complete `release-bundle` with checksums and manifest.
+Manual runs cannot create releases or publish crates.
 
-Pull requests and pushes to `main` run quality checks, all seven platform builds,
-and crate packaging/install checks. They use version `0.0.0` and do not publish.
+Pull requests run quality checks, seven hosted platform builds, and crate
+packaging/install checks, without accessing the CFARM SSH secrets. Pushes to
+`main` also build FreeBSD ARM64 on CFARM. They use version `0.0.0` and do not
+publish. Release builds, including manual build-only runs, require all eight
+targets to pass; a missing or failed FreeBSD build prevents publication.
 
 Local checks:
 
@@ -82,8 +86,19 @@ example is compiled and exercised by tests but is not installed or distributed
 as a separate command. Linux binaries are checked for static
 linking. Android uses NDK 27.3.13750724 with API 24 and is checked for the correct
 ELF architecture, interpreter, and system-library dependencies. Android execution
-is not covered by hosted CI. macOS uses deployment target 11.0. FreeBSD builds
-are deferred while the shared infrastructure is developed.
+is not covered by hosted CI. macOS uses deployment target 11.0.
+
+FreeBSD ARM64 is built on cfarm240 (CheriBSD / Morello, reporting FreeBSD
+15.0-CURRENT) through a GitHub-hosted Ubuntu job. It rsyncs the stamped source
+into a unique directory under `$HOME/.local/share/dtr-ci/tmp/build.*`, runs the
+native validation helper, and downloads the binary from that snapshot's
+`.cfarm-artifacts/dtr`. The runner verifies the ARM64 ELF header and standard
+FreeBSD interpreter, creates the usual archive, and sends that exact archive
+back to CFARM for extracted `--version` and `--help` checks. Only a successful
+run uploads `build-aarch64-unknown-freebsd`; the release bundle requires it and
+includes it in `release-manifest.json` and `SHA256SUMS`.
+The host tests validate execution on cfarm240; other FreeBSD installations
+are not exercised by this job. FreeBSD x64 is not in the release matrix.
 
 The manual `FreeBSD connectivity` workflow probes the CFARM build host from a
 GitHub-hosted Ubuntu runner using the repository secrets `CFARM_FBSD15_KEY`
@@ -92,9 +107,14 @@ GitHub-hosted Ubuntu runner using the repository secrets `CFARM_FBSD15_KEY`
 `mevanlc` and `22`. It reports the OS, architecture, and available build tools,
 then verifies an rsync upload/download in a temporary directory and removes it.
 Remote probe files live under `$HOME/.local/share/dtr-ci/tmp`.
-No Actions runner or toolchain is installed on the remote machine. The probe
-uses first-use host-key trust in a temporary known-hosts file; pin the host key
-before using this connection for release builds.
+No Actions runner or toolchain is installed by the workflow on the remote
+machine. Both probe and build use `scripts/cfarm-freebsd.sh`, reuse the SSH
+connection, and require the Ed25519 host key pinned in `scripts/cfarm-known_hosts`
+under the alias `cfarm-fbsd15`. A host-key change requires verification and an
+explicit pin update. Local temporary keys and remote run directories are removed
+on exit. CFARM build jobs share a concurrency group across CI and releases.
+The release workflow passes only the two CFARM repository secrets to reusable CI;
+crate publishing credentials remain confined to the publishing job.
 
 For a direct SSH build, rsync a source snapshot into
 `$HOME/.local/share/dtr-ci/source` on the FreeBSD host, then run
@@ -102,7 +122,8 @@ For a direct SSH build, rsync a source snapshot into
 Clippy and rustfmt under `$HOME/.cargo` first; ARM64 uses the official standalone
 installer because its rustup bootstrap download is unavailable. The script
 sets PATH explicitly, checks the compiler version, and keeps Cargo caches,
-build output, temporary files, and the resulting binary under `$HOME`. It uses
+build output and temporary files under `$HOME`, and saves the resulting binary
+in `.cfarm-artifacts/dtr` inside the source checkout. It uses
 two build jobs on the shared host and runs formatting, Clippy, tests (including
 real isolated self-installation), doctests, and a release-binary smoke check.
 Nextest is used when available, with a serial Cargo test harness as a fallback

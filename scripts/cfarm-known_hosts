@@ -1,0 +1,2 @@
+# cfarm240 Ed25519 key, pinned from the existing trusted local known_hosts.
+cfarm-fbsd15 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIELDObb/DUiHQO3Gu+N1CmlSDoJ72Im6C2KqBLgtyMc0
