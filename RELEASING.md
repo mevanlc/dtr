@@ -91,9 +91,24 @@ GitHub-hosted Ubuntu runner using the repository secrets `CFARM_FBSD15_KEY`
 `user@hostname`). Dispatch inputs select the SSH login and port, defaulting to
 `mevanlc` and `22`. It reports the OS, architecture, and available build tools,
 then verifies an rsync upload/download in a temporary directory and removes it.
+Remote probe files live under `$HOME/.local/share/dtr-ci/tmp`.
 No Actions runner or toolchain is installed on the remote machine. The probe
 uses first-use host-key trust in a temporary known-hosts file; pin the host key
 before using this connection for release builds.
+
+For a direct SSH build, rsync a source snapshot into
+`$HOME/.local/share/dtr-ci/source` on the FreeBSD host, then run
+`sh scripts/build-freebsd.sh` there. Install the pinned Rust toolchain with
+Clippy and rustfmt under `$HOME/.cargo` first; ARM64 uses the official standalone
+installer because its rustup bootstrap download is unavailable. The script
+sets PATH explicitly, checks the compiler version, and keeps Cargo caches,
+build output, temporary files, and the resulting binary under `$HOME`. It uses
+two build jobs on the shared host and runs formatting, Clippy, tests (including
+real isolated self-installation), doctests, and a release-binary smoke check.
+Nextest is used when available, with the Cargo test harness as a fallback.
+On CheriBSD ARM64, the script creates a home-local `cc` wrapper selecting the
+conventional ARM64 ABI, libraries, linker mode, and `/libexec/ld-elf64.so.1`
+loader required by the official Rust toolchain. The system compiler is unchanged.
 
 Crate verification compiles the packaged source and installs from its unpacked
 contents. Before publishing, the upload job recreates the crate and checks its

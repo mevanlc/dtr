@@ -95,8 +95,13 @@ else
 fi
 REMOTE
 
-remote_dir=$(ssh "${ssh_options[@]}" "$destination" 'mktemp -d /tmp/dtr-freebsd-probe.XXXXXXXX')
-if [[ ! $remote_dir =~ ^/tmp/dtr-freebsd-probe\.[A-Za-z0-9]+$ ]]; then
+remote_dir=$(ssh "${ssh_options[@]}" "$destination" 'sh -s' <<'REMOTE_TEMP'
+set -eu
+mkdir -p "$HOME/.local/share/dtr-ci/tmp"
+mktemp -d "$HOME/.local/share/dtr-ci/tmp/probe.XXXXXXXX"
+REMOTE_TEMP
+)
+if [[ ! $remote_dir =~ ^/[A-Za-z0-9/_.-]+/dtr-ci/tmp/probe\.[A-Za-z0-9]+$ ]]; then
     remote_dir=''
     echo 'Unexpected remote temporary-directory path.' >&2
     exit 1
