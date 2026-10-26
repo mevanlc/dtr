@@ -15,8 +15,8 @@ Keep focused concerns in their existing modules: CLI definitions in
 
 Unit tests live beside the code they exercise. End-to-end Unix CLI tests and
 their stub-command harness live in `tests/cli.rs`. Product documentation is in
-`README.md`; design records and roadmap notes are under `devdocs/`. CI is
-defined in `.github/workflows/ci.yml`.
+`README.md` (quick start) and `doc/MANUAL.md` (detailed reference); design records
+and roadmap notes are under `devdocs/`. CI is defined in `.github/workflows/ci.yml`.
 
 ## Build, Test, and Development Commands
 
@@ -49,9 +49,10 @@ stub harness rather than invoking real forge or installer services. Use
 
 ## Documentation, Commits & Pull Requests
 
-Update `README.md` when CLI syntax, output, supported tools, configuration, or
-behavior changes. Keep `devdocs/` plans consistent; historical superseded
-statements use `※` rather than being silently rewritten.
+Update `doc/MANUAL.md` when CLI syntax, output, supported tools, configuration,
+or behavior changes, and keep the concise `README.md` examples consistent.
+Keep `devdocs/` plans consistent; historical superseded statements use `※` rather
+than being silently rewritten.
 
 Recent commits use concise imperative subjects such as `Add config key
 discovery` and `Implement Rust repository installation`. Follow that pattern,

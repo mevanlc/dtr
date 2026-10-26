@@ -173,6 +173,7 @@ def package_binary(target, destination=Path("dist")):
     files = {
         **{name: Path("target") / target / "release" / name for name in executables},
         "README.md": Path("README.md"),
+        "doc/MANUAL.md": Path("doc/MANUAL.md"),
         "RELEASING.md": Path("RELEASING.md"),
         "LICENSE": Path("LICENSE"),
     }

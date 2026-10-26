@@ -153,8 +153,9 @@ only the compilation already performed by CI.
 ## Downloads and verification
 
 Binary archives use `dtr-vVERSION-TARGET.tar.gz`, or `.zip` for Windows, and
-contain a matching top-level directory with the executable, README, release
-guide, and MIT license. Each release also contains:
+contain a matching top-level directory with the executable, README,
+`doc/MANUAL.md`, release guide, and MIT license. The crate also includes the
+manual. Each release also contains:
 
 - `dtr-VERSION.crate`: the exact crate published to crates.io.
 - `release-manifest.json`: source commit, Rust toolchain, target matrix, and hashes.

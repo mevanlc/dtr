@@ -8,8 +8,9 @@ Status: implemented and validated on macOS (2026-07-23; kit follow-up
 
 Roadmap: completed post-[first MVP](FIRST-MVP.md) increment
 
-This document records the current install interface and supersedes the explicit
-selector spellings in the historical `PLAN-MVP00.md` through `PLAN-MVP04.md`
+This document records the automatic-selection increment and later follow-ups.
+The [manual](../doc/MANUAL.md) is the current user reference. This plan supersedes
+the explicit selector spellings in the historical `PLAN-MVP00.md` through `PLAN-MVP04.md`
 phase records. It does not change what those phases delivered at their original
 completion points. Those records use `※` to mark statements and sections whose
 interface or roadmap status this increment superseded.
@@ -33,7 +34,7 @@ The repository reference defaults to `.` when omitted. Bare `dtr install` and
 and execution paths as an explicit `dtr install .`.
 
 An explicit non-auto tool preserves the established backend mappings and skips
-repository inspection. Native installer arguments retain the existing `--`
+automatic manifest inspection. Native installer arguments retain the existing `--`
 boundary and backend-specific safety checks.
 
 ※ `--add` originally appended successful requests to `install-all.toml`, and
@@ -71,8 +72,9 @@ Successful Git-based tracked installs now carry generated `installed` state in
 their kit entry: a full commit object ID plus a versioned SHA-256 fingerprint of
 the install request. `kit install` skips matching clean local worktrees and
 matching remote selections by default; `--force` bypasses this optimization.
-Local state requires identical clean pre/post snapshots. Remote state covers
-Cargo HEAD/branch/tag/resolvable-revision selectors, default Git selections for
+※ Local state originally required identical clean pre/post snapshots. Current
+state can also record `dirty = true`; only matching clean state permits skips.
+Remote state covers Cargo HEAD/branch/tag/resolvable-revision selectors, default Git selections for
 the Python and npm backends, and exact Git origins reported by Go module
 resolution. Mutable remote selections also require identical pre/post results.
 Probe failures warn and install, while successful batches atomically merge state
@@ -103,8 +105,9 @@ plan blocks and unconditional skip output are superseded.
 The first Ctrl-C stops new job dispatch while allowing active child processes to
 finish normally. Dtr emits the accumulated replay only after they finish,
 immediately before exiting 130. A second Ctrl-C terminates the active child
-process groups, then still joins workers and performs the final replay. A third
-Ctrl-C forces an immediate status-130 exit without replay.
+process groups on Unix (direct children on Windows), then still joins workers
+and performs the final replay. A third Ctrl-C forces an immediate status-130
+exit without replay.
 
 Remote install sources may carry an install-only Go version query suffix, such
 as `owner/repo@v1.2.3` or
@@ -120,6 +123,9 @@ option is rejected after tool resolution for non-Go backends and is also rejecte
 for remote Go sources. Tracked requests persist it as `main = true`, and it forms
 part of the install-request fingerprint without invalidating fingerprints for
 entries that retain the default `main = false` behavior.
+
+※ Here, "root" means the requested local directory, which may be a subdirectory
+of the Git worktree. Dtr does not move to the Git root for `--main` discovery.
 
 ## Conservative automatic selection
 
@@ -295,5 +301,5 @@ this local record until that workflow runs successfully.
 - Configurable shorthand forge, host, source, protocol, or account defaults.
 - GitHub Enterprise, GitLab, and generic-host account selection.
 - Persistent checkout-to-account binding for later fetch and push operations.
-- Windows support.
+- ※ Windows support was subsequently delivered; see [RELEASING.md](../RELEASING.md).
 - JSON output, plugins, `doctor`, update, and uninstall orchestration.

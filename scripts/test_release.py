@@ -73,6 +73,8 @@ class ProjectTest(unittest.TestCase):
         )
         Path("rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.98.1"\n')
         Path("README.md").write_text("A sample project\n")
+        Path("doc").mkdir()
+        Path("doc/MANUAL.md").write_text("Detailed usage\n")
         Path("RELEASING.md").write_text("Release instructions\n")
         Path("LICENSE").write_text("MIT\n")
         patcher = mock.patch.object(release, "source_commit", return_value="a" * 40)
@@ -136,6 +138,7 @@ class ProjectTest(unittest.TestCase):
                     for name in (
                         executable,
                         "README.md",
+                        "doc/MANUAL.md",
                         "RELEASING.md",
                         "LICENSE",
                     )
@@ -177,6 +180,7 @@ class ProjectTest(unittest.TestCase):
                         "first" + suffix,
                         "second" + suffix,
                         "README.md",
+                        "doc/MANUAL.md",
                         "RELEASING.md",
                         "LICENSE",
                     )

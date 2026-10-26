@@ -2,6 +2,8 @@
 
 ※ The historical `--explain` flag is now named `--dry-run`; `-n` is unchanged.
 
+See the [manual](../doc/MANUAL.md) for the current user reference.
+
 Status: implemented and validated on macOS and Linux (2026-07-23)
 
 Roadmap: [dtr first MVP](FIRST-MVP.md), phase 4 of 5

@@ -9,7 +9,7 @@ readme = "README.md"
 keywords = ["git", "github", "clone", "install", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 autobins = false
-include = ["/src/**", "/tests/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/RELEASING.md", "/LICENSE"]
+include = ["/src/**", "/tests/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/doc/MANUAL.md", "/RELEASING.md", "/LICENSE"]
 
 [[bin]]
 name = "dtr"

@@ -7,7 +7,8 @@ delivered as a post-MVP increment (2026-07-23)
 
 ※ Subsequent platform work adds native Windows CI and local self-installation
 through an internal Cargo example trampoline. The macOS/Linux finish line
-below records the original MVP scope; see the README for current behavior.
+below records the original MVP scope; see the [manual](../doc/MANUAL.md) for
+current behavior.
 
 `※` marks a historical statement or section whose interface or roadmap status
 has since been superseded by [PLAN-AUTO-INSTALL.md](PLAN-AUTO-INSTALL.md).
@@ -96,7 +97,8 @@ catch-all for unrelated features.
 
 Completed on 2026-07-23 against the finish line above. Counts and interface
 spellings in this section are the first-MVP closure snapshot; current behavior
-and validation are recorded in [PLAN-AUTO-INSTALL.md](PLAN-AUTO-INSTALL.md).
+is documented in the [manual](../doc/MANUAL.md), with later implementation and
+validation records in [PLAN-AUTO-INSTALL.md](PLAN-AUTO-INSTALL.md).
 
 | Finish-line requirement | Completion evidence |
 |---|---|
@@ -122,6 +124,10 @@ release actions and were not performed by this roadmap closure.
   `-U` / `--upstream-remote-name`, and forge-aware GitHub SSH references.
 - GitHub browser URL normalization: well-known paths after `owner/repo` and
   HTTP(S) query parameters are stripped before clone or installation planning.
+- Installation kits with revision-based skips, concurrent installs, and shared
+  verbosity controls; see the [kit manual](../doc/MANUAL.md#manage-an-installation-kit).
+- Windows support and local self-installation through an internal Cargo example
+  trampoline; see [release targets and validation](../RELEASING.md).
 
 ## Remaining after the first MVP
 
@@ -129,7 +135,7 @@ release actions and were not performed by this roadmap closure.
 - Configurable default forge, host, source, or account for shorthand repospecs.
 - GitHub Enterprise, GitLab, and generic-host account selection.
 - Persistent checkout-to-account binding for later fetch and push operations.
-- Windows support.
+- ※ Windows support was subsequently delivered.
 - JSON output, plugins, `doctor`, update, or uninstall orchestration.
 
 These may inform current architecture, but none blocks the first-MVP finish
