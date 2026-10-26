@@ -278,11 +278,7 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
         github_owner,
         ..
     } = context;
-    if !args.install_args.is_empty() {
-        return Err(DtrError::new(
-            "arguments after -- are supported only by the Cargo, uv, pipx, and npm installers",
-        ));
-    }
+    validate_go_arguments(&args.install_args)?;
     if args.main && !spec.is_local() {
         return Err(DtrError::new(
             "--main applies only to local Go repository installs",
@@ -306,13 +302,14 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
         } else {
             OsString::from("./...")
         };
+        let mut command_args = vec![OsString::from("install")];
+        command_args.extend(args.install_args);
+        command_args.push(package.clone());
         return Ok(CommandPlan {
-            kind: PlanKind::GoInstall(GoInstallSource::Local {
-                package: package.clone(),
-            }),
+            kind: PlanKind::GoInstall(GoInstallSource::Local { package }),
             program: "go".into(),
             executable: "go".into(),
-            args: vec!["install".into(), package],
+            args: command_args,
             current_dir: Some(directory.clone()),
             target_dir: None,
             preparations: Vec::new(),
@@ -333,19 +330,22 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
         import_path.push_str("@latest");
     }
 
-    let install_source = import_path.clone().into();
+    let install_source: OsString = import_path.clone().into();
     let install_revision = import_path
         .contains('@')
         .then(|| InstallRevision::GoModule {
-            query: OsString::from(import_path.clone()),
+            query: OsString::from(import_path),
         });
+    let mut command_args = vec![OsString::from("install")];
+    command_args.extend(args.install_args);
+    command_args.push(install_source.clone());
     Ok(CommandPlan {
         kind: PlanKind::GoInstall(GoInstallSource::Remote {
             import_path: install_source,
         }),
         program: "go".into(),
         executable: "go".into(),
-        args: vec!["install".into(), import_path.into()],
+        args: command_args,
         current_dir: None,
         target_dir: None,
         preparations: Vec::new(),
@@ -772,6 +772,34 @@ fn validate_npm_arguments(arguments: &[OsString]) -> Result<(), DtrError> {
     Ok(())
 }
 
+fn validate_go_arguments(arguments: &[OsString]) -> Result<(), DtrError> {
+    if let Some(first) = arguments.first() {
+        let bytes = first.as_encoded_bytes();
+        if first != "--" && (bytes.len() < 2 || bytes[0] != b'-') {
+            return Err(DtrError::new(
+                "Go arguments after -- must start with a build flag such as -tags or -ldflags; a leading value would be treated as another package",
+            ));
+        }
+    }
+    for argument in arguments {
+        if argument == "--" {
+            return Err(DtrError::new(
+                "a forwarded -- would bypass dtr's single-source go install boundary",
+            ));
+        }
+        if let Some(argument) = argument.to_str()
+            && (matches!(argument, "-C" | "--C")
+                || argument.starts_with("-C=")
+                || argument.starts_with("--C="))
+        {
+            return Err(DtrError::new(
+                "Go directory option -C conflicts with dtr's resolved repository; remove it from the arguments after --",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn reject_cargo_source_arguments(arguments: &[OsString]) -> Result<(), DtrError> {
     const SOURCE_OPTIONS: [&str; 4] = ["--git", "--path", "--registry", "--index"];
     for argument in arguments {
@@ -1015,6 +1043,32 @@ mod tests {
             spec.go_import_path(Some("mevanlc")).unwrap(),
             "github.com/mevanlc/tool"
         );
+    }
+
+    #[test]
+    fn go_arguments_accept_build_flags_and_reject_source_or_boundary_options() {
+        assert!(
+            validate_go_arguments(
+                &["-tags", "noserver", "-ldflags=-s -w", "-trimpath"].map(OsString::from)
+            )
+            .is_ok()
+        );
+        for arguments in [
+            vec!["another/package"],
+            vec!["-"],
+            vec!["--"],
+            vec!["-tags", "noserver", "--"],
+            vec!["-C", "/tmp/other"],
+            vec!["--C", "/tmp/other"],
+            vec!["-C=/tmp/other"],
+            vec!["--C=/tmp/other"],
+        ] {
+            let arguments = arguments
+                .into_iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>();
+            assert!(validate_go_arguments(&arguments).is_err(), "{arguments:?}");
+        }
     }
 
     #[test]

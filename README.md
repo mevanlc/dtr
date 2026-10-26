@@ -438,8 +438,8 @@ Use `--main` to install only the primary command from a local Go repository:
 
 ```sh
 cd ./my-tool
-dtr kit add --main
-# logically: go install .
+dtr kit add --main -- -tags noserver
+# logically: go install -tags noserver .
 ```
 
 Dtr first checks the repository-root package. If it is `package main`, that
@@ -449,6 +449,11 @@ package. Zero or multiple candidates produce an error before installation; an
 ambiguous error lists the candidate package paths. `--main` is currently
 rejected for non-Go backends and remote Go repositories. The selection is
 recorded as `main = true` when the request is added to a kit.
+
+Native `go install` build flags follow `--` and are placed before the resolved
+package or import path. The first forwarded argument must be a flag; `-C` and a
+forwarded `--` are rejected because dtr owns the repository directory and
+single-source package boundary.
 
 The implementation sets the child process working directory directly; it never
 constructs a shell command.

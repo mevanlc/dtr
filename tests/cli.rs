@@ -3586,17 +3586,45 @@ fn cargo_source_arguments_cannot_replace_the_resolved_repository() {
 }
 
 #[test]
-fn rust_rejects_no_latest_and_go_rejects_cargo_arguments() {
+fn rust_rejects_no_latest_and_go_validates_forwarded_arguments() {
     let harness = Harness::new(&["cargo", "go"]);
     let cargo = harness.run(&["install", "--tool", "cargo", "--no-latest", "owner/tool"]);
     assert_eq!(cargo.status.code(), Some(2));
     assert!(stderr(&cargo).contains("applies only to the Go installer"));
     assert!(!harness.was_invoked("cargo"));
 
-    let go = harness.run(&["install", "--tool", "go", "owner/tool", "--", "--locked"]);
-    assert_eq!(go.status.code(), Some(2));
-    assert!(stderr(&go).contains("Cargo, uv, pipx, and npm installers"));
-    assert!(!harness.was_invoked("go"));
+    for arguments in [
+        vec!["another/pkg"],
+        vec!["--"],
+        vec!["-C", "/tmp/other"],
+        vec!["-C=/tmp/other"],
+    ] {
+        let mut command = vec!["install", "--tool", "go", "owner/tool", "--"];
+        command.extend(arguments.iter().copied());
+        let go = harness.run(&command);
+        assert_eq!(go.status.code(), Some(2), "{arguments:?}");
+        assert!(!harness.was_invoked("go"), "{arguments:?}");
+    }
+
+    let remote = harness.run(&[
+        "install",
+        "--tool",
+        "go",
+        "owner/tool",
+        "--",
+        "-tags",
+        "noserver",
+    ]);
+    assert!(remote.status.success(), "{}", stderr(&remote));
+    assert_eq!(
+        harness.invocation("go").args,
+        [
+            "install",
+            "-tags",
+            "noserver",
+            "github.com/owner/tool@latest"
+        ]
+    );
 }
 
 #[test]
@@ -4425,12 +4453,15 @@ fn local_go_main_prefers_the_root_command_and_is_tracked() {
     let root_json = format!(r#"{{"Name":"main","Dir":{root:?}}}"#);
 
     let added = harness
-        .command(&["k", "a", "--main"])
+        .command(&["k", "a", "--main", "--", "-tags", "noserver"])
         .env("DTR_TEST_GO_ROOT_JSON", &root_json)
         .output()
         .unwrap();
     assert!(added.status.success(), "{}", stderr(&added));
-    assert_eq!(harness.invocation("go").args, ["install", "."]);
+    assert_eq!(
+        harness.invocation("go").args,
+        ["install", "-tags", "noserver", "."]
+    );
     assert_eq!(
         harness.invocation("go-main-root").args,
         ["list", "-find", "-json", "."]
@@ -4440,9 +4471,17 @@ fn local_go_main_prefers_the_root_command_and_is_tracked() {
     let config = fs::read_to_string(harness.kit_file()).unwrap();
     assert!(config.contains("tool = \"go\""), "{config}");
     assert!(config.contains("main = true"), "{config}");
+    assert!(
+        config.contains("args = [\"-tags\", \"noserver\"]"),
+        "{config}"
+    );
     let listed = harness.run(&["k", "ls"]);
     assert!(listed.status.success(), "{}", stderr(&listed));
-    assert!(stdout(&listed).contains("--main"), "{}", stdout(&listed));
+    assert!(
+        stdout(&listed).contains("--main") && stdout(&listed).contains("-- -tags noserver"),
+        "{}",
+        stdout(&listed)
+    );
 
     fs::remove_file(harness.log.join("go")).unwrap();
     let reinstalled = harness
@@ -4451,7 +4490,10 @@ fn local_go_main_prefers_the_root_command_and_is_tracked() {
         .output()
         .unwrap();
     assert!(reinstalled.status.success(), "{}", stderr(&reinstalled));
-    assert_eq!(harness.invocation("go").args, ["install", "."]);
+    assert_eq!(
+        harness.invocation("go").args,
+        ["install", "-tags", "noserver", "."]
+    );
 }
 
 #[test]
