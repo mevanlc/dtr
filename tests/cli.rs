@@ -2003,6 +2003,330 @@ fn install_add_does_not_track_a_failed_install() {
 }
 
 #[test]
+fn kit_check_only_requires_referenced_commands_and_summarizes_present_directories() {
+    let harness = Harness::new(&["cargo"]);
+    harness.local_repository("first", &[], &[]);
+    harness.local_repository("second", &[], &[]);
+    let kit = r#"
+        [[install]]
+        repospec = "./first"
+        tool = "cargo"
+        args = ["--locked"]
+
+        [[install]]
+        repospec = "./second"
+        tool = "rust"
+
+        [[install]]
+        repospec = "owner/remote"
+        tool = "cargo"
+    "#;
+    harness.write_kit(kit);
+
+    let output = harness.run(&["k", "check"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stderr(&output), "");
+    assert_eq!(
+        stdout(&output),
+        "configuration: valid (3 entries)\ntoolchains: 1 found, 0 missing\ndirectories: 2 present, 0 missing\n"
+    );
+    assert!(!harness.was_invoked("cargo"));
+    assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), kit);
+}
+
+#[test]
+fn kit_check_reports_every_missing_command_and_directory_once() {
+    let harness = Harness::new(&[]);
+    harness.local_repository("present", &[], &[]);
+    fs::write(harness.work.join("file"), "not a directory").unwrap();
+    harness.write_kit(
+        r#"
+            [[install]]
+            repospec = "./missing-one"
+            tool = "cargo"
+
+            [[install]]
+            repospec = "./missing-two"
+            tool = "go"
+
+            [[install]]
+            repospec = "./present"
+            tool = "uv"
+
+            [[install]]
+            repospec = "./file"
+            tool = "npm"
+
+            [[install]]
+            repospec = "owner/remote"
+            tool = "cargo"
+
+            [[install]]
+            repospec = "owner/python"
+            tool = "pipx"
+        "#,
+    );
+
+    let output = harness.run(&["kit", "check"]);
+    assert_eq!(output.status.code(), Some(1));
+    let errors = stderr(&output);
+    assert_eq!(errors.matches("missing toolchain command:").count(), 5);
+    for tool in ["cargo", "go", "uv", "npm", "pipx"] {
+        assert!(
+            errors.contains(&format!("missing toolchain command: {tool} (")),
+            "{errors}"
+        );
+    }
+    assert_eq!(errors.matches("missing directory:").count(), 3);
+    for directory in ["./missing-one", "./missing-two", "./file"] {
+        assert!(errors.contains(directory), "{errors}");
+    }
+    assert!(errors.contains("path is not a directory"), "{errors}");
+    assert!(!errors.contains("./present"), "{errors}");
+    assert!(!errors.contains("git"), "{errors}");
+    assert_eq!(
+        stdout(&output),
+        "configuration: valid (6 entries)\ntoolchains: 0 found, 5 missing\ndirectories: 1 present, 3 missing\n"
+    );
+}
+
+#[test]
+fn kit_check_detects_local_auto_tools_and_python_fallback_without_installing() {
+    let harness = Harness::new(&["npm", "pipx"]);
+    harness.local_repository("rust", &["Cargo.toml"], &[]);
+    harness.local_repository("js", &["package.json"], &[]);
+    harness.local_repository("python", &["pyproject.toml"], &[]);
+    harness.write_kit(
+        r#"
+            [[install]]
+            repospec = "./rust"
+
+            [[install]]
+            repospec = "./js"
+
+            [[install]]
+            repospec = "./python"
+
+            [[install]]
+            repospec = "./missing"
+        "#,
+    );
+
+    let output = harness.run(&["kit", "check", "-vv"]);
+    assert_eq!(output.status.code(), Some(1));
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("missing toolchain command: cargo"),
+        "{errors}"
+    );
+    assert!(errors.contains("missing directory: ./missing"), "{errors}");
+    assert!(
+        !errors.contains("missing toolchain command: uv"),
+        "{errors}"
+    );
+    assert!(!errors.contains("could not inspect"), "{errors}");
+    for present in ["./rust", "./js", "./python"] {
+        assert!(!errors.contains(present), "{errors}");
+    }
+    assert!(stdout(&output).contains("toolchains: 2 found, 1 missing"));
+    assert!(stdout(&output).contains("directories: 3 present, 1 missing"));
+    assert!(!harness.was_invoked("npm"));
+    assert!(!harness.was_invoked("pipx"));
+}
+
+#[test]
+fn kit_check_detects_remote_auto_tools_without_installing_or_probing_revisions() {
+    let harness = Harness::new(&["gh"]);
+    harness.write_kit("[[install]]\nrepospec = 'owner/tool'\n");
+    let output = harness
+        .command(&["kit", "check"])
+        .env(
+            "DTR_TEST_GITHUB_TREE_JSON",
+            r#"{"truncated":false,"tree":[{"path":"Cargo.toml","type":"blob"}]}"#,
+        )
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("missing toolchain command: cargo"));
+    assert!(stdout(&output).contains("directories: 0 present, 0 missing"));
+    assert!(!harness.was_invoked("cargo"));
+    assert!(!harness.was_invoked("git-ls-remote"));
+}
+
+#[test]
+fn kit_check_validates_all_entries_even_when_tools_and_directories_are_missing() {
+    let harness = Harness::new(&[]);
+    harness.write_kit(
+        r#"
+            [[install]]
+            repospec = "./missing"
+            tool = "cargo"
+            args = ["--path", "./other"]
+
+            [[install]]
+            repospec = "owner/js"
+            tool = "npm"
+            args = ["--no-global"]
+
+            [[install]]
+            repospec = "owner/python"
+            tool = "pipx"
+            args = ["another-package"]
+
+            [[install]]
+            repospec = "owner/rust"
+            tool = "cargo"
+            no_latest = true
+
+            [[install]]
+            repospec = "owner/go"
+            tool = "go"
+            main = true
+
+            [[install]]
+            repospec = "owner/go-query@v1.0.0"
+            tool = "go"
+            no_latest = true
+
+            [[install]]
+            repospec = "owner/go-flags"
+            tool = "go"
+            args = ["-C", "./other"]
+
+            [[install]]
+            repospec = ""
+            tool = "cargo"
+
+            [[install]]
+            repospec = "not/a/repospec"
+            tool = "cargo"
+        "#,
+    );
+
+    let output = harness.run(&["kit", "check"]);
+    assert_eq!(output.status.code(), Some(1));
+    let errors = stderr(&output);
+    for number in 1..=9 {
+        assert!(errors.contains(&format!("kit entry {number}:")), "{errors}");
+    }
+    for message in [
+        "source option --path",
+        "npm global-mode options",
+        "pipx option values",
+        "--no-latest applies only to the Go installer",
+        "--main applies only to local Go repository installs",
+        "explicit Go version query conflicts with --no-latest",
+        "Go directory option -C",
+        "repospec must not be empty",
+        "unsupported repository reference",
+        "missing directory: ./missing",
+    ] {
+        assert!(errors.contains(message), "missing {message:?} in {errors}");
+    }
+    assert!(stdout(&output).contains("configuration: invalid (9 entries)"));
+    assert!(stdout(&output).contains("toolchains: 0 found, 4 missing"));
+}
+
+#[test]
+fn kit_check_reports_duplicates_and_still_checks_referenced_directories() {
+    let harness = Harness::new(&[]);
+    harness.write_kit(
+        "[[install]]\nrepospec = './missing'\ntool = 'cargo'\n\
+         [[install]]\nrepospec = './nested/../missing'\ntool = 'go'\n",
+    );
+    let output = harness.run(&["kit", "check"]);
+    assert_eq!(output.status.code(), Some(1));
+    let errors = stderr(&output);
+    assert!(errors.contains("duplicate repositories"), "{errors}");
+    assert_eq!(errors.matches("missing directory:").count(), 1);
+    assert!(stdout(&output).contains("directories: 0 present, 1 missing"));
+    assert!(stdout(&output).contains("toolchains: 0 found, 2 missing"));
+}
+
+#[test]
+fn kit_check_uses_alternate_files_and_expands_home_paths_without_writing() {
+    let harness = Harness::new(&["cargo"]);
+    harness.local_repository("present", &[], &[]);
+    let alternate = harness.work.join("alternate.toml");
+    let kit = "[[install]]\nrepospec = '~/present'\ntool = 'cargo'\n\
+               [[install]]\nrepospec = '~/missing'\ntool = 'cargo'\n";
+    fs::write(&alternate, kit).unwrap();
+    harness.write_kit("broken = [");
+    for flag in ["-n", "-q", "-vv"] {
+        let output = harness
+            .command(&["kit", "check", flag, "--file", "~/alternate.toml"])
+            .env("HOME", &harness.work)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(stdout(&output).contains("directories: 1 present, 1 missing"));
+        assert!(
+            stderr(&output).contains(&harness.work.join("missing").display().to_string()),
+            "{}",
+            stderr(&output)
+        );
+        assert_eq!(fs::read_to_string(&alternate).unwrap(), kit);
+        assert_eq!(
+            fs::read_to_string(harness.kit_file()).unwrap(),
+            "broken = ["
+        );
+    }
+    assert!(!harness.was_invoked("cargo"));
+}
+
+#[test]
+fn kit_check_accepts_an_empty_kit_and_rejects_missing_or_malformed_files() {
+    let harness = Harness::new(&[]);
+    harness.write_legacy_kit("[[install]]\nrepospec = 'owner/tool'\n");
+    let missing = harness.run(&["kit", "check"]);
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(stderr(&missing).contains("could not read kit configuration"));
+    assert!(!harness.kit_file().exists());
+    assert!(harness.legacy_kit_file().exists());
+
+    for (config, message) in [
+        ("[[install]", "could not parse kit configuration"),
+        ("surprise = true", "unknown field `surprise`"),
+        ("[[install]]\nrepospec = 123", "invalid type"),
+        (
+            "[[install]]\nrepospec = './tool'\ntool = 'unknown'",
+            "unknown variant",
+        ),
+    ] {
+        harness.write_kit(config);
+        let output = harness.run(&["kit", "check"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(stderr(&output).contains(message), "{}", stderr(&output));
+        assert_eq!(fs::read_to_string(harness.kit_file()).unwrap(), config);
+    }
+
+    harness.write_kit("");
+    let empty = harness.run(&["kit", "check"]);
+    assert!(empty.status.success(), "{}", stderr(&empty));
+    assert_eq!(
+        stdout(&empty),
+        "configuration: valid (0 entries)\ntoolchains: 0 found, 0 missing\ndirectories: 0 present, 0 missing\n"
+    );
+}
+
+#[test]
+fn kit_check_reports_invalid_runtime_config_and_continues_checking_the_kit() {
+    let harness = Harness::new(&[]);
+    harness.write_config("verbosity = 9");
+    harness.write_kit("[[install]]\nrepospec = './missing'\ntool = 'cargo'\n");
+    let output = harness.run(&["kit", "check"]);
+    assert_eq!(output.status.code(), Some(1));
+    let errors = stderr(&output);
+    assert!(errors.contains("verbosity must"), "{errors}");
+    assert!(errors.contains("missing directory: ./missing"), "{errors}");
+    assert!(
+        errors.contains("missing toolchain command: cargo"),
+        "{errors}"
+    );
+    assert!(stdout(&output).contains("configuration: invalid"));
+}
+
+#[test]
 fn kit_list_uses_the_alternate_config_and_prints_reusable_commands() {
     let harness = Harness::new(&[]);
     let alternate = harness.work.join("alternate/kit.toml");

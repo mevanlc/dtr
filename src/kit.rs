@@ -24,6 +24,8 @@ use crate::repospec::{InstallSource, RepositoryIdentity};
 use crate::resolve::plan_install;
 use crate::self_rebuild;
 
+mod check;
+
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct KitConfig {
@@ -194,6 +196,9 @@ pub(crate) fn run(
             );
         }
         KitCommand::List(args) => return list(&selected_file_path(args.file, !dry_run)?),
+        KitCommand::Check(args) => {
+            return check::run(&selected_file_path(args.file, false)?, verbosity_adjustment);
+        }
         KitCommand::Remove(args) => return run_remove(args, dry_run, verbosity_adjustment),
         KitCommand::Edit(args) => {
             let path = selected_file_path(args.file, !dry_run)?;
@@ -730,6 +735,12 @@ fn load_optional(path: &Path) -> Result<LoadedConfig, DtrError> {
 }
 
 fn load_config(path: &Path, missing_ok: bool) -> Result<LoadedConfig, DtrError> {
+    let loaded = parse_config(path, missing_ok)?;
+    validate_unique_repositories(&loaded.config, path, home::home_dir().as_deref())?;
+    Ok(loaded)
+}
+
+fn parse_config(path: &Path, missing_ok: bool) -> Result<LoadedConfig, DtrError> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if missing_ok && error.kind() == std::io::ErrorKind::NotFound => {
@@ -751,7 +762,6 @@ fn load_config(path: &Path, missing_ok: bool) -> Result<LoadedConfig, DtrError> 
             path.display()
         ))
     })?;
-    validate_unique_repositories(&config, path, home::home_dir().as_deref())?;
     Ok(LoadedConfig { config, text })
 }
 

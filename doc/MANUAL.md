@@ -531,6 +531,7 @@ dtr [--dry-run|-n] [-q...] [-v...] kit|k add|a [--no-install] [-t|--tool <tool>]
 dtr [--dry-run|-n] [-q...] [-v...] kit|k remove|rm [--file <FILE>] [<dtr-repospec>]
 dtr [--dry-run|-n] [-q...] [-v...] kit|k install|i [-j|--jobs <n|auto>] [--force] [--file <FILE>]
 dtr kit|k list|ls [--file <FILE>]
+dtr kit|k check [--file <FILE>]
 dtr [--dry-run|-n] kit|k edit|e [--file <FILE>]
 ```
 
@@ -603,12 +604,47 @@ They do not turn a successful installer result into a failure. A successful
 install that cannot be tied safely to a commit clears stale state rather than
 risking a false skip.
 
-On the first non-dry-run operation that uses the default file, dtr silently
-renames a sibling `install-all.toml` to `kit.toml` when `kit.toml` does not yet
-exist. If both files exist, dtr uses `kit.toml` and leaves `install-all.toml`
-untouched. Dry-run mode and explicit `--file` paths do not perform this migration.
+On the first non-dry-run operation other than `kit check` that uses the default
+file, dtr silently renames a sibling `install-all.toml` to `kit.toml` when
+`kit.toml` does not yet exist. If both files exist, dtr uses `kit.toml` and leaves
+`install-all.toml` untouched. `kit check`, dry-run mode, and explicit `--file` paths do not perform
+this migration.
 
-`--file FILE` selects an alternate kit TOML file for remove, install, list, or edit.
+`kit check` parses the kit and validates its schema, repository references,
+duplicate repositories, installer options, and native-argument rules. It also
+checks `config.toml` when present. It continues across invalid entries, reporting
+their entry numbers, each missing installer command once, and each missing local
+directory individually. A path that exists but is not a directory also fails the
+check. Existing directories appear only as a total count, including with `-v`.
+Relative paths resolve from the current working directory, just as for installs;
+`~/` expands to the user home directory. Equivalent paths count once.
+
+Only installers referenced by kit entries are checked on PATH: `cargo` (including
+`rust`), `go`, `uv`, `pipx`, or `npm`. For `tool = "auto"`, dtr uses its normal
+manifest detection and checks the selected installer. Python detection prefers
+uv, then pipx, and reports an error if neither is available. Missing directories
+are reported without trying to detect an installer inside them. Remote auto
+detection may access the network and require Git or a forge CLI. Explicit tool
+selections need no network access for this check. The check does not run
+installers, probe installed revisions, or change configuration or install state.
+`--dry-run` has the same behavior because the check already makes no changes.
+
+For example:
+
+```text
+dtr: error: missing directory: /home/me/p/my/tool (not found)
+dtr: error: missing toolchain command: cargo (not found on PATH)
+configuration: valid (4 entries)
+toolchains: 1 found, 1 missing
+directories: 2 present, 1 missing
+```
+
+The exit status is 0 when all checks pass, 1 when validation, tool detection, or
+environment checks fail, and 2 when the kit cannot be read or parsed. An empty
+kit is valid.
+
+`--file FILE` selects an alternate kit TOML file for remove, install, list, check,
+or edit.
 `kit list` prints each tracked entry as a shell-safe, reusable
 `dtr install ...` command without invoking an installer; generated install state
 is not included in that command. An empty kit lists no commands, including after

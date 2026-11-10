@@ -162,36 +162,26 @@ pub(crate) fn plan_install(
     verbosity: crate::output::Verbosity,
 ) -> Result<CommandPlan, DtrError> {
     let requested_tool = args.tool;
-    let InstallSource { spec, go_query } = InstallSource::parse(&args.repospec)?;
+    let source = InstallSource::parse(&args.repospec)?;
+    validate_install_options(&args, &source, requested_tool)?;
+    let spec = &source.spec;
     verbosity.debug(format_args!(
         "resolved {}; requested tool {requested_tool}",
         spec.description()
     ));
-    if go_query.is_some() && args.no_latest {
-        return Err(DtrError::new(
-            "an explicit Go version query conflicts with --no-latest",
-        ));
-    }
-    if let Some(query) = &go_query
-        && !matches!(requested_tool, InstallTool::Auto | InstallTool::Go)
-    {
-        return Err(DtrError::new(format!(
-            "Go version query @{query} requires --tool go, but {requested_tool} was selected"
-        )));
-    }
     let github_owner = if matches!(spec, RepoSpec::GithubMine { .. }) {
         Some(resolve_github_owner()?)
     } else {
         None
     };
     let github_selection = if requested_tool == InstallTool::Auto {
-        GithubSelection::Resolved(select_github_auth(&spec)?)
+        GithubSelection::Resolved(select_github_auth(spec)?)
     } else {
         GithubSelection::Unresolved
     };
     let selected_tool = if requested_tool == InstallTool::Auto {
         install_detect::detect_tool(
-            &spec,
+            spec,
             github_owner.as_deref(),
             github_selection.selection(),
             verbosity,
@@ -200,18 +190,8 @@ pub(crate) fn plan_install(
         requested_tool
     };
     verbosity.debug(format_args!("selected install backend {selected_tool}"));
-    if args.main && selected_tool != InstallTool::Go {
-        return Err(DtrError::new(format!(
-            "--main is currently supported only by the Go installer, but {selected_tool} was selected"
-        )));
-    }
-    if let Some(query) = &go_query
-        && selected_tool != InstallTool::Go
-    {
-        return Err(DtrError::new(format!(
-            "Go version query @{query} requires --tool go, but {selected_tool} was selected"
-        )));
-    }
+    validate_install_options(&args, &source, selected_tool)?;
+    let InstallSource { spec, go_query } = source;
     let context = InstallContext {
         args,
         spec,
@@ -228,6 +208,66 @@ pub(crate) fn plan_install(
         InstallTool::Npm => plan_npm_install(context),
         InstallTool::Auto => unreachable!("auto tool was resolved before backend planning"),
     }
+}
+
+pub(crate) fn validate_install_options(
+    args: &InstallArgs,
+    source: &InstallSource,
+    tool: InstallTool,
+) -> Result<(), DtrError> {
+    if source.go_query.is_some() && args.no_latest {
+        return Err(DtrError::new(
+            "an explicit Go version query conflicts with --no-latest",
+        ));
+    }
+    if let Some(query) = &source.go_query
+        && !matches!(tool, InstallTool::Auto | InstallTool::Go)
+    {
+        return Err(DtrError::new(format!(
+            "Go version query @{query} requires --tool go, but {tool} was selected"
+        )));
+    }
+    if args.main && !matches!(tool, InstallTool::Auto | InstallTool::Go) {
+        return Err(DtrError::new(format!(
+            "--main is currently supported only by the Go installer, but {tool} was selected"
+        )));
+    }
+    if tool == InstallTool::Auto {
+        return Ok(());
+    }
+    if args.no_latest {
+        if tool != InstallTool::Go {
+            return Err(DtrError::new(
+                "--no-latest applies only to the Go installer",
+            ));
+        }
+        if source.spec.is_local() {
+            return Err(DtrError::new(
+                "--no-latest applies only to remote Go repository installs",
+            ));
+        }
+    }
+    if args.main && !source.spec.is_local() {
+        return Err(DtrError::new(
+            "--main applies only to local Go repository installs",
+        ));
+    }
+    match tool {
+        InstallTool::Go => validate_go_arguments(&args.install_args)?,
+        InstallTool::Cargo => reject_cargo_source_arguments(&args.install_args)?,
+        InstallTool::Pipx => validate_pipx_arguments(&args.install_args)?,
+        InstallTool::Npm => validate_npm_arguments(&args.install_args)?,
+        InstallTool::Uv => {}
+        InstallTool::Auto => unreachable!("auto options were checked above"),
+    }
+    if !source.spec.is_local() && !matches!(source.spec, RepoSpec::GithubMine { .. }) {
+        if tool == InstallTool::Go {
+            source.spec.go_import_path(None)?;
+        } else {
+            source.spec.install_git_remote(None)?;
+        }
+    }
+    Ok(())
 }
 
 struct InstallContext {
@@ -259,7 +299,7 @@ impl GithubSelection {
     }
 }
 
-fn select_github_auth(spec: &RepoSpec) -> Result<Option<GithubAuthSelection>, DtrError> {
+pub(crate) fn select_github_auth(spec: &RepoSpec) -> Result<Option<GithubAuthSelection>, DtrError> {
     match spec {
         RepoSpec::Forge {
             forge: Forge::GitHub,
@@ -278,21 +318,10 @@ fn plan_go_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
         github_owner,
         ..
     } = context;
-    validate_go_arguments(&args.install_args)?;
-    if args.main && !spec.is_local() {
-        return Err(DtrError::new(
-            "--main applies only to local Go repository installs",
-        ));
-    }
     require_command("go", "installing a Go command")?;
     let repospec = spec.description();
 
     if spec.is_local() {
-        if args.no_latest {
-            return Err(DtrError::new(
-                "--no-latest applies only to remote Go repository installs",
-            ));
-        }
         let directory = spec
             .local_path()
             .expect("local spec has a path")
@@ -457,12 +486,6 @@ fn plan_cargo_install(context: InstallContext) -> Result<CommandPlan, DtrError> 
         github_selection,
         ..
     } = context;
-    if args.no_latest {
-        return Err(DtrError::new(
-            "--no-latest applies only to the Go installer",
-        ));
-    }
-    reject_cargo_source_arguments(&args.install_args)?;
     require_command("cargo", "installing a Rust binary")?;
 
     let repospec = spec.description();
@@ -548,14 +571,6 @@ fn plan_python_install(
         github_selection,
         ..
     } = context;
-    if args.no_latest {
-        return Err(DtrError::new(
-            "--no-latest applies only to the Go installer",
-        ));
-    }
-    if matches!(backend, PythonBackend::Pipx) {
-        validate_pipx_arguments(&args.install_args)?;
-    }
     require_command(backend.program(), backend.purpose())?;
 
     let repospec = spec.description();
@@ -628,12 +643,6 @@ fn plan_npm_install(context: InstallContext) -> Result<CommandPlan, DtrError> {
         github_selection,
         ..
     } = context;
-    if args.no_latest {
-        return Err(DtrError::new(
-            "--no-latest applies only to the Go installer",
-        ));
-    }
-    validate_npm_arguments(&args.install_args)?;
     let executable = npm_executable().ok_or_else(|| {
         DtrError::new(
             "npm is required for installing a JavaScript tool with npm, but was not found on PATH",
@@ -942,7 +951,7 @@ fn require_command(program: &str, purpose: &str) -> Result<(), DtrError> {
     }
 }
 
-fn resolve_github_owner() -> Result<String, DtrError> {
+pub(crate) fn resolve_github_owner() -> Result<String, DtrError> {
     require_command("gh", "resolving your GitHub repository")?;
     let output = Command::new("gh")
         .args(["api", "user", "--jq", ".login"])

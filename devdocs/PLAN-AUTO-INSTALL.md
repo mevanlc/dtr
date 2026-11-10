@@ -41,11 +41,11 @@ boundary and backend-specific safety checks.
 the collection was managed by the top-level `install-all|ia` command with
 `--list` and `--edit` action flags. The current interface stores the collection
 in `kit.toml` and exposes `dtr kit add`, `dtr kit remove`, `dtr kit install`,
-`dtr kit list`, and `dtr kit edit`
+`dtr kit list`, `dtr kit check`, and `dtr kit edit`
 without compatibility aliases for the former CLI. On first non-dry-run use of
-the default file, it silently renames `install-all.toml` only when `kit.toml` is
-absent; an existing `kit.toml`, dry-run mode, and explicit `--file` paths do not
-trigger migration.
+the default file outside `kit check`, it silently renames `install-all.toml` only
+when `kit.toml` is absent; an existing `kit.toml`, `kit check`, dry-run mode, and
+explicit `--file` paths do not trigger migration.
 
 The current command hierarchy has visible shorthand aliases: `dtr k` for
 `dtr kit`, `dtr k i` for `dtr kit install`, and `dtr k ls` for `dtr kit list`.
@@ -58,6 +58,15 @@ state. It leaves installed binaries and checkouts in place, supports `--file`
 and read-only dry runs, and reports untracked repositories as errors. Removal
 preserves other entries and their comments using the same atomic file replacement
 as tracking. Removing the last entry leaves an empty kit that `kit list` accepts.
+
+`kit check [--file FILE]` validates kit syntax, schema, normalized repository
+uniqueness, and each entry's repository, options, and argument boundaries. It
+checks the runtime configuration, only the installer commands referenced by the
+kit (using normal detection for `auto`), and each local repository directory.
+Missing commands and directories are reported individually; existing directories
+appear only as a total count. Validation continues across entries, and the check
+does not install tools, probe revisions, write state, or migrate legacy files.
+Remote auto detection may still inspect repositories over the network.
 
 `--add` retains normal install planning and execution, then records the successful
 request in the default `kit.toml`. Local paths are stored canonically; Windows

@@ -15,7 +15,7 @@ use std::io::{self, Write};
 
 use clap_complete::generate;
 
-use crate::cli::{Cli, DtrCommand};
+use crate::cli::{Cli, DtrCommand, KitArgs, KitCommand};
 use crate::clone_args::{ParsedClone, parse_clone_args};
 use crate::error::DtrError;
 use crate::output::Verbosity;
@@ -40,7 +40,13 @@ fn run() -> Result<i32, DtrError> {
         command,
     } = Cli::parse();
 
-    if !dry_run {
+    let checking_kit = matches!(
+        &command,
+        DtrCommand::Kit(KitArgs {
+            command: KitCommand::Check(_)
+        })
+    );
+    if !dry_run && !checking_kit {
         self_rebuild::sweep_stale_old_binary();
     }
 

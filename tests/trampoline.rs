@@ -322,6 +322,24 @@ fn dry_run_does_not_build_or_clean_up_backups() {
 }
 
 #[test]
+fn kit_check_does_not_build_or_clean_up_backups() {
+    let harness = Harness::new();
+    let backup = harness.binary.with_extension("exe.old");
+    fs::write(&backup, "leave untouched").unwrap();
+    let kit = harness.directory.path().join("kit.toml");
+    fs::write(&kit, "[[install]]\nrepospec = '.'\ntool = 'cargo'\n").unwrap();
+    success(
+        harness
+            .command(&["kit", "check", "--file", kit.to_str().unwrap()])
+            .output()
+            .unwrap(),
+    );
+    assert!(!harness.directory.path().join("metadata.args").exists());
+    assert!(!harness.directory.path().join("install.args").exists());
+    assert_eq!(fs::read_to_string(backup).unwrap(), "leave untouched");
+}
+
+#[test]
 fn build_artifact_and_launch_failures_leave_the_original_usable() {
     let harness = Harness::new();
     let output = harness

@@ -177,6 +177,12 @@ pub(crate) enum KitCommand {
     #[command(visible_alias = "ls")]
     List(KitFileArgs),
 
+    /// Validate the kit and check its toolchain commands and local directories
+    #[command(
+        long_about = "Validate the kit configuration, check referenced installer commands on PATH, and report missing local directories. Existing directories are shown only as a count.\n\nDoes not install tools or change configuration. Auto detection for remote entries may access the network."
+    )]
+    Check(KitFileArgs),
+
     /// Edit the kit configuration
     #[command(visible_alias = "e")]
     Edit(KitFileArgs),
@@ -531,14 +537,16 @@ mod tests {
         let args = parse_kit_add(&["dtr", "kit", "add", "--main"]);
         assert!(args.main);
 
-        for subcommand in ["list", "edit", "remove"] {
+        for subcommand in ["list", "edit", "remove", "check"] {
             let cli = Cli::try_parse_from(["dtr", "kit", subcommand, "--file", "other.toml"])
                 .expect("valid kit management command");
             let DtrCommand::Kit(args) = cli.command else {
                 panic!("expected kit command");
             };
             let file = match args.command {
-                KitCommand::List(args) | KitCommand::Edit(args) => args.file,
+                KitCommand::List(args) | KitCommand::Edit(args) | KitCommand::Check(args) => {
+                    args.file
+                }
                 KitCommand::Remove(args) => args.file,
                 KitCommand::Add(_) | KitCommand::Install(_) => {
                     panic!("expected kit management command")

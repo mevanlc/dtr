@@ -12,6 +12,7 @@ dtr kit add --tool cargo owner/tool -- --locked
 dtr kit install -n                # preview what needs installing or rebuilding
 dtr kit install                   # run the kit; skip matching recorded revisions
 dtr kit list                      # show reusable install commands
+dtr kit check                     # validate config, required tools, and local dirs
 dtr kit remove owner/tool         # stop tracking; keep binaries and checkout
 ```
 
@@ -25,9 +26,10 @@ are rebuilt. Use `--force` to reinstall every entry, and `-v` to see skips and
 commands. Local entries use the checkout as it stands; dtr does not pull it.
 
 Short forms include `dtr k a`, `dtr k i`, `dtr k ls`, and `dtr k rm`.
-Use `dtr kit edit` to edit the file. See the
-[kit manual](doc/MANUAL.md#manage-an-installation-kit) for caching, alternate
-files, and batch behavior.
+Use `dtr kit edit` to edit the file. `dtr kit check` reports missing installer
+commands and local directories; existing directories appear only as a count.
+See the [kit manual](doc/MANUAL.md#manage-an-installation-kit) for caching,
+alternate files, and batch behavior.
 
 ## Install dtr
 
